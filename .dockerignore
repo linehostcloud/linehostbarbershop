@@ -1,0 +1,15 @@
+.git
+.idea
+.vscode
+.env
+.env.backup
+vendor
+node_modules
+storage/logs
+storage/framework/cache
+storage/framework/sessions
+storage/framework/testing
+storage/framework/views
+public/build
+public/hot
+database/*.sqlite
