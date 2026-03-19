@@ -57,10 +57,17 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         $response
             ->assertOk()
             ->assertSee('Mensageria WhatsApp')
-            ->assertSee('Resumo Geral')
+            ->assertSee('Resumo Operacional')
+            ->assertSee('Saude por Provider')
+            ->assertSee('Preparado Para Proxima Etapa')
+            ->assertSee('Exige Atencao Agora')
             ->assertSee('Fila Operacional')
-            ->assertSee('Feed Recente')
+            ->assertSee('Boundary Rejections')
+            ->assertSee('Feed Operacional')
+            ->assertSee('Deduplicacao')
             ->assertSee('data-whatsapp-operations-panel', false)
+            ->assertSee('data-control="provider"', false)
+            ->assertSee('data-control="auto-refresh"', false)
             ->assertSee('/api/v1/operations/whatsapp/summary', false)
             ->assertSee('/api/v1/operations/whatsapp/feed', false);
     }
@@ -132,6 +139,8 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections/summary', false)
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections', false)
             ->assertSee('/api/v1/operations/whatsapp/feed', false)
+            ->assertSee('Preparado Para Proxima Etapa')
+            ->assertSee('Smart Routing')
             ->assertDontSee('panel-super-secret-token')
             ->assertDontSee('panel-verify-secret')
             ->assertDontSee('panel-webhook-secret');

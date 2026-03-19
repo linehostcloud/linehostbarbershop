@@ -41,8 +41,9 @@ x-app-common: &app-common
     TENANT_DATABASE_PREFIX: ${TENANT_DATABASE_PREFIX:-sistema_barbearia_tenant_}
     TENANT_DATABASE_CHARSET: ${TENANT_DATABASE_CHARSET:-utf8mb4}
     TENANT_DATABASE_COLLATION: ${TENANT_DATABASE_COLLATION:-utf8mb4_unicode_ci}
-    TENANT_DEFAULT_DOMAIN_SUFFIX: ${TENANT_DEFAULT_DOMAIN_SUFFIX:-sistemabarbearia.local}
-    CENTRAL_DOMAINS: ${CENTRAL_DOMAINS:-sistemabarbearia.local,localhost,127.0.0.1}
+    TENANT_DEFAULT_DOMAIN_SUFFIX: ${TENANT_DEFAULT_DOMAIN_SUFFIX:-sistema-barbearia.localhost}
+    TENANT_LOCAL_BROWSER_DOMAIN_SUFFIX: ${TENANT_LOCAL_BROWSER_DOMAIN_SUFFIX:-sistema-barbearia.localhost}
+    CENTRAL_DOMAINS: ${CENTRAL_DOMAINS:-sistema-barbearia.localhost,localhost,127.0.0.1}
     TENANT_SLUG_HEADER: ${TENANT_SLUG_HEADER:-X-Tenant-Slug}
     MAIL_MAILER: ${MAIL_MAILER:-smtp}
     MAIL_HOST: ${MAIL_HOST:-mailpit}

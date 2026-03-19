@@ -27,7 +27,8 @@ Premissas:
 
 - a rede Docker externa usada na infraestrutura local e `linehost-network`
 - `mariadb`, `mailpit` e o proxy HTTP ja existem nessa rede
-- o dominio local configurado para a aplicacao e `sistemabarbearia.local`
+- o host local configurado para a aplicacao e `sistema-barbearia.localhost`
+- tenants locais devem ser acessados por `http://<slug>.sistema-barbearia.localhost`
 
 Passos:
 
@@ -44,8 +45,11 @@ Passos:
    - `LANDLORD_DB_HOST=mariadb`
    - `TENANT_DB_HOST=mariadb`
    - `MAIL_HOST=mailpit`
-   - `VIRTUAL_HOST=sistemabarbearia.local`
-   - `CENTRAL_DOMAINS=sistemabarbearia.local,localhost,127.0.0.1`
+   - `APP_URL=http://sistema-barbearia.localhost`
+   - `VIRTUAL_HOST=sistema-barbearia.localhost`
+   - `TENANT_DEFAULT_DOMAIN_SUFFIX=sistema-barbearia.localhost`
+   - `TENANT_LOCAL_BROWSER_DOMAIN_SUFFIX=sistema-barbearia.localhost`
+   - `CENTRAL_DOMAINS=sistema-barbearia.localhost,localhost,127.0.0.1`
    - `WHATSAPP_DEFAULT_PROVIDER=fake`
    - `OUTBOX_DEFAULT_MAX_ATTEMPTS=5`
    - `OUTBOX_DEFAULT_RETRY_BACKOFF_SECONDS=60`
@@ -60,6 +64,12 @@ Passos:
 
    ```bash
    docker compose up -d --build
+   ```
+
+4.1. Instale a regra wildcard do proxy local para tenants uma unica vez:
+
+   ```bash
+   sh scripts/dev/ensure-local-tenant-proxy.sh
    ```
 
 5. Gere a chave:
@@ -78,6 +88,12 @@ Passos:
 
    ```bash
    docker compose run --rm app php artisan tenancy:provision-tenant barbearia-demo "Barbearia Demo" --owner-email=owner@barbearia-demo.local --owner-name="Owner Demo"
+   ```
+
+   Depois disso, o login do tenant fica disponivel em:
+
+   ```bash
+   http://barbearia-demo.sistema-barbearia.localhost/painel/operacoes/whatsapp/login
    ```
 
 8. Se precisar rerodar apenas as migrations de um tenant existente, use o slug ou ULID:

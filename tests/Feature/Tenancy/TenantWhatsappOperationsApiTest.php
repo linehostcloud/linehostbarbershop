@@ -140,6 +140,15 @@ class TenantWhatsappOperationsApiTest extends TestCase
             ['payload_validation_failed' => 1, 'webhook_signature_invalid' => 1],
             $this->totalsByKey($data['boundary_rejections']['code_totals'], 'code'),
         );
+        $this->assertSame(2, data_get($data, 'operational_cards.messages_recent_total'));
+        $this->assertSame(2, data_get($data, 'operational_cards.attempts_recent_total'));
+        $this->assertSame(1, data_get($data, 'operational_cards.operational_failures_total'));
+        $this->assertSame(0, data_get($data, 'operational_cards.retry_scheduled_total'));
+        $this->assertSame(0, data_get($data, 'operational_cards.fallback_scheduled_total'));
+        $this->assertSame(0, data_get($data, 'operational_cards.fallback_executed_total'));
+        $this->assertSame(2, data_get($data, 'operational_cards.boundary_rejections_total'));
+        $this->assertSame(0, data_get($data, 'operational_cards.pending_queue_total'));
+        $this->assertSame(50.0, (float) data_get($data, 'operational_cards.operational_failure_rate'));
         $this->assertStringNotContainsString('summary-secret-token', $response->getContent());
     }
 
@@ -208,6 +217,30 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'failed_at' => '2026-03-19 09:20:00',
         ]);
         $this->createIntegrationAttempt($tenant, [
+            'message_id' => $messageFailureId,
+            'provider' => 'fake',
+            'status' => 'retry_scheduled',
+            'normalized_status' => 'queued',
+            'normalized_error_code' => 'timeout_error',
+            'created_at' => '2026-03-19 09:23:00',
+        ]);
+        $this->createIntegrationAttempt($tenant, [
+            'message_id' => $messageFailureId,
+            'provider' => 'fake',
+            'status' => 'fallback_scheduled',
+            'normalized_status' => 'queued',
+            'normalized_error_code' => 'provider_unavailable',
+            'created_at' => '2026-03-19 09:24:00',
+            'response_payload_json' => [
+                'planned_fallback' => [
+                    'from_provider' => 'fake',
+                    'to_provider' => 'whatsapp_cloud',
+                    'to_slot' => 'secondary',
+                    'trigger_error_code' => 'provider_unavailable',
+                ],
+            ],
+        ]);
+        $this->createIntegrationAttempt($tenant, [
             'message_id' => $messageCloudId,
             'provider' => 'whatsapp_cloud',
             'status' => 'failed',
@@ -245,6 +278,47 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'code' => 'webhook_signature_invalid',
             'occurred_at' => '2026-03-19 09:22:00',
         ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageFailureId,
+            'event_name' => 'whatsapp.message.fallback.scheduled',
+            'status' => 'recorded',
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'payload_json' => [
+                'fallback' => [
+                    'from_provider' => 'fake',
+                    'from_slot' => 'primary',
+                    'to_provider' => 'whatsapp_cloud',
+                    'to_slot' => 'secondary',
+                    'trigger_error_code' => 'provider_unavailable',
+                ],
+            ],
+            'occurred_at' => '2026-03-19 09:24:30',
+        ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageFailureId,
+            'event_name' => 'whatsapp.message.fallback.executed',
+            'status' => 'processed',
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'payload_json' => [
+                'fallback' => [
+                    'from_provider' => 'fake',
+                    'from_slot' => 'primary',
+                    'to_provider' => 'whatsapp_cloud',
+                    'to_slot' => 'secondary',
+                    'trigger_error_code' => 'provider_unavailable',
+                ],
+            ],
+            'result_json' => [
+                'authorization' => 'Bearer provider-feed-fallback-secret',
+            ],
+            'occurred_at' => '2026-03-19 09:27:00',
+        ]);
 
         $response = $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'))
             ->getJson($this->tenantUrl($tenant, '/operations/whatsapp/providers', [
@@ -261,13 +335,20 @@ class TenantWhatsappOperationsApiTest extends TestCase
         $this->assertTrue((bool) $primary['enabled']);
         $this->assertSame('fake', $primary['provider']);
         $this->assertSame(['text', 'healthcheck'], $primary['enabled_capabilities']);
-        $this->assertSame(2, $primary['send_attempts_total']);
+        $this->assertSame(4, $primary['send_attempts_total']);
         $this->assertSame(1, $primary['success_attempts']);
-        $this->assertSame(1, $primary['failure_attempts']);
-        $this->assertSame(50.0, (float) $primary['success_rate']);
-        $this->assertSame(50.0, (float) $primary['failure_rate']);
+        $this->assertSame(3, $primary['failure_attempts']);
+        $this->assertSame(1, $primary['retry_scheduled_total']);
+        $this->assertSame(1, $primary['fallback_scheduled_total']);
+        $this->assertSame(1, $primary['fallback_executed_total']);
+        $this->assertSame(25.0, (float) $primary['success_rate']);
+        $this->assertSame(75.0, (float) $primary['failure_rate']);
         $this->assertTrue((bool) data_get($primary, 'last_healthcheck.healthy'));
-        $this->assertSame('rate_limit', data_get($primary, 'top_error_codes.0.code'));
+        $this->assertSame('unstable', data_get($primary, 'operational_state.label'));
+        $this->assertSame(
+            ['provider_unavailable' => 1, 'rate_limit' => 1, 'timeout_error' => 1],
+            $this->totalsByKey($primary['signal_totals'], 'code'),
+        );
         $this->assertNotNull($primary['last_activity_at']);
 
         $this->assertFalse((bool) $secondary['enabled']);
@@ -277,6 +358,7 @@ class TenantWhatsappOperationsApiTest extends TestCase
         $this->assertStringNotContainsString('cloud-hidden-token', $response->getContent());
         $this->assertStringNotContainsString('verify-hidden-token', $response->getContent());
         $this->assertStringNotContainsString('webhook-hidden-token', $response->getContent());
+        $this->assertStringNotContainsString('provider-feed-fallback-secret', $response->getContent());
     }
 
     public function test_queue_lists_attention_items_applies_filters_and_does_not_leak_sensitive_data(): void
@@ -521,6 +603,46 @@ class TenantWhatsappOperationsApiTest extends TestCase
         ]);
         $this->createEventLog($tenant, [
             'message_id' => $messageEventId,
+            'event_name' => 'whatsapp.message.fallback.scheduled',
+            'status' => 'recorded',
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'payload_json' => [
+                'fallback' => [
+                    'from_provider' => 'fake',
+                    'from_slot' => 'primary',
+                    'to_provider' => 'whatsapp_cloud',
+                    'to_slot' => 'secondary',
+                    'trigger_error_code' => 'provider_unavailable',
+                ],
+                'authorization' => 'Bearer feed-fallback-secret',
+            ],
+            'occurred_at' => '2026-03-19 12:02:30',
+        ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageEventId,
+            'event_name' => 'whatsapp.message.fallback.executed',
+            'status' => 'processed',
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'payload_json' => [
+                'fallback' => [
+                    'from_provider' => 'fake',
+                    'from_slot' => 'primary',
+                    'to_provider' => 'whatsapp_cloud',
+                    'to_slot' => 'secondary',
+                    'trigger_error_code' => 'provider_unavailable',
+                ],
+            ],
+            'result_json' => ['secret' => 'feed-fallback-executed-secret'],
+            'occurred_at' => '2026-03-19 12:02:45',
+        ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageEventId,
             'event_name' => 'outbox.event.reclaim.blocked',
             'status' => 'failed',
             'payload_json' => ['reason' => 'max_reclaim_attempts_exceeded'],
@@ -563,17 +685,21 @@ class TenantWhatsappOperationsApiTest extends TestCase
 
         $items = collect($response->json('data'));
 
-        $this->assertSame(6, $response->json('meta.total'));
+        $this->assertSame(8, $response->json('meta.total'));
         $this->assertSame('terminal_failure', $items->first()['type']);
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_config_activated'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_healthcheck'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'outbox_reclaimed'));
+        $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_fallback_scheduled'));
+        $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_fallback_executed'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'manual_review_required'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'boundary_rejection'));
 
         $content = $response->getContent();
         $this->assertStringNotContainsString('feed-healthcheck-secret', $content);
         $this->assertStringNotContainsString('feed-event-secret', $content);
+        $this->assertStringNotContainsString('feed-fallback-secret', $content);
+        $this->assertStringNotContainsString('feed-fallback-executed-secret', $content);
         $this->assertStringNotContainsString('feed-manual-review-secret', $content);
         $this->assertStringNotContainsString('feed-boundary-secret', $content);
         $this->assertStringNotContainsString('feed-integration-secret', $content);

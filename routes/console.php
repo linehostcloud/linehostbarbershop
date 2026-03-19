@@ -96,8 +96,13 @@ Artisan::command('tenancy:provision-tenant
     string $tradeName,
     ProvisionTenantAction $provisionTenant,
 ) {
+    $localBrowserSuffix = ltrim((string) config('tenancy.identification.local_browser_domain_suffix', ''), '.');
+    $defaultSuffix = app()->environment('local') && $localBrowserSuffix !== ''
+        ? $localBrowserSuffix
+        : ltrim((string) config('tenancy.provisioning.default_domain_suffix', 'sistema-barbearia.localhost'), '.');
+
     $domain = $this->option('domain')
-        ?: sprintf('%s.%s', $slug, ltrim((string) config('tenancy.provisioning.default_domain_suffix', 'sistemabarbearia.local'), '.'));
+        ?: sprintf('%s.%s', $slug, $defaultSuffix);
 
     $data = new TenantProvisioningData(
         slug: $slug,

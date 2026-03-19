@@ -34,4 +34,22 @@ class ResolveTenantByHeaderTest extends TestCase
             ->assertNotFound()
             ->assertJsonPath('message', 'Nenhum tenant foi encontrado para o host "localhost".');
     }
+
+    public function test_it_resolves_a_local_browser_tenant_host_by_slug_even_without_an_exact_domain_record(): void
+    {
+        config()->set('app.env', 'local');
+        config()->set('tenancy.identification.local_browser_domain_suffix', 'sistema-barbearia.localhost');
+
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-localhost',
+            domain: 'barbearia-localhost.tenant.test',
+        );
+
+        $response = $this->getJson('http://barbearia-localhost.sistema-barbearia.localhost/api/v1/tenant/context');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.tenant_slug', $tenant->slug)
+            ->assertJsonPath('data.resolved_host', 'barbearia-localhost.sistema-barbearia.localhost');
+    }
 }

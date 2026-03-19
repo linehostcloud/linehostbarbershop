@@ -28,6 +28,10 @@ class WhatsappOperationsViewFactory
         int $sendAttemptsTotal,
         int $successAttempts,
         int $failureAttempts,
+        int $retryScheduledTotal,
+        int $fallbackScheduledTotal,
+        int $fallbackExecutedTotal,
+        array $signalTotals,
         array $topErrorCodes,
         ?array $lastHealthcheck,
         ?string $lastActivityAt,
@@ -41,13 +45,27 @@ class WhatsappOperationsViewFactory
             'send_attempts_total' => $sendAttemptsTotal,
             'success_attempts' => $successAttempts,
             'failure_attempts' => $failureAttempts,
+            'retry_scheduled_total' => $retryScheduledTotal,
+            'fallback_scheduled_total' => $fallbackScheduledTotal,
+            'fallback_executed_total' => $fallbackExecutedTotal,
             'success_rate' => $sendAttemptsTotal > 0
                 ? round(($successAttempts / $sendAttemptsTotal) * 100, 2)
                 : 0.0,
             'failure_rate' => $sendAttemptsTotal > 0
                 ? round(($failureAttempts / $sendAttemptsTotal) * 100, 2)
                 : 0.0,
+            'signal_totals' => $signalTotals,
             'top_error_codes' => $topErrorCodes,
+            'operational_state' => $this->providerOperationalState(
+                configuration: $configuration,
+                sendAttemptsTotal: $sendAttemptsTotal,
+                failureAttempts: $failureAttempts,
+                retryScheduledTotal: $retryScheduledTotal,
+                fallbackScheduledTotal: $fallbackScheduledTotal,
+                fallbackExecutedTotal: $fallbackExecutedTotal,
+                signalTotals: $signalTotals,
+                lastHealthcheck: $lastHealthcheck,
+            ),
             'last_activity_at' => $lastActivityAt,
             'last_validated_at' => $configuration->last_validated_at?->toIso8601String(),
             'updated_at' => $configuration->updated_at?->toIso8601String(),
@@ -82,6 +100,7 @@ class WhatsappOperationsViewFactory
     {
         $message = $outboxEvent->message;
         $slot = $this->slotFromMessage($message) ?? $this->slotFromOutbox($outboxEvent);
+        $fallback = $this->sanitizeFallback(data_get($outboxEvent->context_json, 'whatsapp_fallback'));
 
         return [
             'source' => 'outbox_event',
@@ -98,6 +117,8 @@ class WhatsappOperationsViewFactory
             'message_id' => $outboxEvent->message_id,
             'outbox_event_id' => $outboxEvent->id,
             'integration_attempt_id' => null,
+            'decision_source' => $fallback !== null ? 'fallback' : ($slot ?? 'unknown'),
+            'fallback' => $fallback,
             'event_name' => $outboxEvent->event_name,
             'summary' => $outboxEvent->failure_reason ?: $outboxEvent->last_reclaim_reason ?: 'Item de outbox exige atencao operacional.',
             'details' => [
@@ -116,6 +137,8 @@ class WhatsappOperationsViewFactory
      */
     public function queueMessageItem(Message $message): array
     {
+        $fallback = $this->sanitizeFallback(data_get($message->payload_json, 'fallback'));
+
         return [
             'source' => 'message',
             'attention_type' => 'message_terminal_failure',
@@ -128,6 +151,8 @@ class WhatsappOperationsViewFactory
             'message_id' => $message->id,
             'outbox_event_id' => null,
             'integration_attempt_id' => null,
+            'decision_source' => $fallback !== null ? 'fallback' : ($this->slotFromMessage($message) ?? 'unknown'),
+            'fallback' => $fallback,
             'event_name' => 'message.failed',
             'summary' => $message->failure_reason ?: 'Mensagem com falha terminal.',
             'details' => [
@@ -167,6 +192,10 @@ class WhatsappOperationsViewFactory
             'message_id' => $attempt->message_id,
             'outbox_event_id' => $attempt->outbox_event_id,
             'integration_attempt_id' => $attempt->id,
+            'decision_source' => $activeFallback !== null || $plannedFallback !== null
+                ? 'fallback'
+                : ($this->slotFromMessage($message) ?? 'unknown'),
+            'fallback' => $activeFallback ?? $plannedFallback,
             'event_name' => 'integration_attempt.issue',
             'summary' => $attempt->failure_reason ?: 'Tentativa de integracao exige atencao operacional.',
             'details' => [
@@ -224,6 +253,7 @@ class WhatsappOperationsViewFactory
             'details' => [
                 'action' => $action,
                 'result' => $result,
+                'slot' => $slot,
             ],
         ];
     }
@@ -275,6 +305,8 @@ class WhatsappOperationsViewFactory
                 'event_name' => $eventLog->event_name,
                 'message_id' => $eventLog->message_id,
                 'aggregate_id' => $eventLog->aggregate_id,
+                'provider' => $provider,
+                'slot' => $slot,
                 'reason' => $reason !== '' ? $reason : null,
                 'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
                 'result' => $this->sanitizer->sanitize($eventLog->result_json ?? []),
@@ -334,6 +366,7 @@ class WhatsappOperationsViewFactory
                 'operation' => $attempt->operation,
                 'http_status' => $attempt->http_status,
                 'provider_error_code' => $attempt->provider_error_code,
+                'slot' => $this->slotFromMessage($attempt->message),
             ],
         ];
     }
@@ -368,5 +401,105 @@ class WhatsappOperationsViewFactory
             ?? data_get($audit->before_json, 'slot');
 
         return is_string($slot) && $slot !== '' ? $slot : null;
+    }
+
+    /**
+     * @param  array<int, array{code:string,total:int}>  $signalTotals
+     * @param  array<string, mixed>|null  $lastHealthcheck
+     * @return array<string, string|bool|null>
+     */
+    private function providerOperationalState(
+        WhatsappProviderConfig $configuration,
+        int $sendAttemptsTotal,
+        int $failureAttempts,
+        int $retryScheduledTotal,
+        int $fallbackScheduledTotal,
+        int $fallbackExecutedTotal,
+        array $signalTotals,
+        ?array $lastHealthcheck,
+    ): array {
+        $healthFailed = $lastHealthcheck !== null && ! (bool) ($lastHealthcheck['healthy'] ?? false);
+        $failureRate = $sendAttemptsTotal > 0
+            ? ($failureAttempts / $sendAttemptsTotal) * 100
+            : 0.0;
+        $hasUnavailableSignal = $this->signalPresent($signalTotals, 'provider_unavailable');
+        $hasTimeoutSignal = $this->signalPresent($signalTotals, 'timeout_error');
+        $hasRateLimitSignal = $this->signalPresent($signalTotals, 'rate_limit');
+        $hasTransientSignal = $this->signalPresent($signalTotals, 'transient_network_error');
+
+        if (! $configuration->enabled) {
+            return [
+                'label' => 'disabled',
+                'tone' => 'stone',
+                'reason' => 'Provider desabilitado administrativamente.',
+                'healthy' => false,
+            ];
+        }
+
+        if ($healthFailed && $hasUnavailableSignal && $failureAttempts > 0) {
+            return [
+                'label' => 'unavailable',
+                'tone' => 'rose',
+                'reason' => 'Healthcheck ruim com indisponibilidade recente do provider.',
+                'healthy' => false,
+            ];
+        }
+
+        if (
+            $healthFailed
+            || $failureRate >= 60
+            || $fallbackScheduledTotal > 0
+            || $fallbackExecutedTotal > 0
+            || $retryScheduledTotal >= 3
+        ) {
+            return [
+                'label' => 'unstable',
+                'tone' => 'amber',
+                'reason' => 'Ha sinais recentes de retry, fallback ou degradacao operacional.',
+                'healthy' => false,
+            ];
+        }
+
+        if ($failureAttempts > 0 || $retryScheduledTotal > 0 || $hasTimeoutSignal || $hasRateLimitSignal || $hasTransientSignal) {
+            return [
+                'label' => 'degraded',
+                'tone' => 'amber',
+                'reason' => 'Ha falhas recentes, mas o provider segue operando.',
+                'healthy' => true,
+            ];
+        }
+
+        return [
+            'label' => 'healthy',
+            'tone' => 'emerald',
+            'reason' => 'Sem sinais relevantes de falha na janela observada.',
+            'healthy' => true,
+        ];
+    }
+
+    /**
+     * @param  array<int, array{code:string,total:int}>  $signalTotals
+     */
+    private function signalPresent(array $signalTotals, string $code): bool
+    {
+        foreach ($signalTotals as $signal) {
+            if (($signal['code'] ?? null) === $code && (int) ($signal['total'] ?? 0) > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function sanitizeFallback(mixed $fallback): ?array
+    {
+        if (! is_array($fallback)) {
+            return null;
+        }
+
+        return $this->sanitizer->sanitize($fallback);
     }
 }

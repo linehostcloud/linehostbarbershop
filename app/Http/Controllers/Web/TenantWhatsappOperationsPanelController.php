@@ -43,9 +43,13 @@ class TenantWhatsappOperationsPanelController extends Controller
                 ],
                 'filters' => [
                     'window' => (string) $request->query('window', config('observability.whatsapp_operations.default_window', '24h')),
+                    'provider' => (string) $request->query('provider', ''),
                     'queue_provider' => (string) $request->query('queue_provider', ''),
                     'queue_status' => (string) $request->query('queue_status', ''),
                     'queue_error_code' => (string) $request->query('queue_error_code', ''),
+                    'feed_type' => (string) $request->query('feed_type', ''),
+                    'feed_source' => (string) $request->query('feed_source', ''),
+                    'auto_refresh' => filter_var($request->query('auto_refresh', false), FILTER_VALIDATE_BOOL),
                     'queue_page' => max(1, (int) $request->query('queue_page', 1)),
                     'boundary_page' => max(1, (int) $request->query('boundary_page', 1)),
                     'feed_page' => max(1, (int) $request->query('feed_page', 1)),

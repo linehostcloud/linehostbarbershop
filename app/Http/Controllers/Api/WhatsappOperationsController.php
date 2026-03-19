@@ -74,11 +74,30 @@ class WhatsappOperationsController extends Controller
             $this->groupedCounts($boundaryQuery, 'code'),
             'code',
         );
+        $messageStatusMap = $this->pairsToMap($messageStatusTotals, 'status');
+        $outboxStatusMap = $this->pairsToMap($outboxStatusTotals, 'status');
+        $attemptStatusMap = $this->pairsToMap($attemptStatusTotals, 'status');
+        $fallbackEventMetrics = $this->fallbackEventMetrics($window, $providerFilter);
+        $attemptTotal = array_sum(array_values($attemptStatusMap));
+        $operationalFailuresTotal = $this->sumBuckets($attemptStatusMap, ['failed', 'retry_scheduled', 'fallback_scheduled']);
+        $pendingQueueTotal = $this->sumBuckets($outboxStatusMap, ['pending', 'processing', 'retry_scheduled']);
+        $boundaryTotal = array_sum(array_column($boundaryCodeTotals, 'total'));
 
         return response()->json([
             'data' => [
                 'window' => $this->windowPayload($window),
                 'filters' => $this->filtersPayload($request, $providerFilter),
+                'operational_cards' => [
+                    'messages_recent_total' => array_sum(array_values($messageStatusMap)),
+                    'attempts_recent_total' => $attemptTotal,
+                    'operational_failures_total' => $operationalFailuresTotal,
+                    'retry_scheduled_total' => (int) ($attemptStatusMap['retry_scheduled'] ?? 0),
+                    'fallback_scheduled_total' => (int) ($attemptStatusMap['fallback_scheduled'] ?? 0),
+                    'fallback_executed_total' => (int) ($fallbackEventMetrics['totals']['executed'] ?? 0),
+                    'boundary_rejections_total' => $boundaryTotal,
+                    'pending_queue_total' => $pendingQueueTotal,
+                    'operational_failure_rate' => $this->percentage($operationalFailuresTotal, $attemptTotal),
+                ],
                 'messages' => [
                     'total' => array_sum(array_column($messageStatusTotals, 'total')),
                     'status_totals' => $messageStatusTotals,
@@ -124,8 +143,10 @@ class WhatsappOperationsController extends Controller
             ->all();
 
         $attemptMetrics = [];
+        $attemptStatusCounts = [];
         $lastAttemptAt = [];
         $topErrors = [];
+        $signalTotals = [];
 
         if ($providers !== []) {
             $attemptRows = IntegrationAttempt::query()
@@ -153,6 +174,20 @@ class WhatsappOperationsController extends Controller
                 $lastAttemptAt[(string) $row->provider] = $row->last_attempt_at;
             }
 
+            $statusRows = IntegrationAttempt::query()
+                ->where('channel', 'whatsapp')
+                ->where('operation', 'send_message')
+                ->where('direction', 'outbound')
+                ->whereIn('provider', $providers)
+                ->whereBetween('created_at', [$window->startedAt, $window->endedAt])
+                ->selectRaw('provider, status, COUNT(*) as total')
+                ->groupBy('provider', 'status')
+                ->get();
+
+            foreach ($statusRows as $row) {
+                $attemptStatusCounts[(string) $row->provider][(string) $row->status] = (int) $row->total;
+            }
+
             $errorRows = IntegrationAttempt::query()
                 ->where('channel', 'whatsapp')
                 ->where('operation', 'send_message')
@@ -168,17 +203,33 @@ class WhatsappOperationsController extends Controller
 
             foreach ($errorRows as $row) {
                 $provider = (string) $row->provider;
+                $errorCode = (string) $row->normalized_error_code;
 
                 if (count($topErrors[$provider] ?? []) >= $topErrorLimit) {
+                    if (! $this->isOperationalSignal($errorCode)) {
+                        continue;
+                    }
+                }
+
+                if (count($topErrors[$provider] ?? []) < $topErrorLimit) {
+                    $topErrors[$provider][] = [
+                        'code' => $errorCode,
+                        'total' => (int) $row->total,
+                    ];
+                }
+
+                if (! $this->isOperationalSignal($errorCode)) {
                     continue;
                 }
 
-                $topErrors[$provider][] = [
-                    'code' => (string) $row->normalized_error_code,
+                $signalTotals[$provider][] = [
+                    'code' => $errorCode,
                     'total' => (int) $row->total,
                 ];
             }
         }
+
+        $fallbackEventMetrics = $this->fallbackEventMetrics($window, $providerFilter);
 
         $healthcheckAudits = AuditLog::query()
             ->where('tenant_id', $tenantId)
@@ -252,6 +303,10 @@ class WhatsappOperationsController extends Controller
                 sendAttemptsTotal: $metrics['total'],
                 successAttempts: $metrics['succeeded'],
                 failureAttempts: $metrics['failed'],
+                retryScheduledTotal: (int) data_get($attemptStatusCounts, $provider.'.retry_scheduled', 0),
+                fallbackScheduledTotal: (int) data_get($attemptStatusCounts, $provider.'.fallback_scheduled', 0),
+                fallbackExecutedTotal: (int) data_get($fallbackEventMetrics, 'by_provider.'.$provider.'.executed', 0),
+                signalTotals: $signalTotals[$provider] ?? [],
                 topErrorCodes: $topErrors[$provider] ?? [],
                 lastHealthcheck: $latestHealthchecks[$key] ?? null,
                 lastActivityAt: $this->latestTimestamp([
@@ -771,6 +826,51 @@ class WhatsappOperationsController extends Controller
     }
 
     /**
+     * @param  list<array<string, int|string>>  $pairs
+     * @return array<string, int>
+     */
+    private function pairsToMap(array $pairs, string $key): array
+    {
+        $map = [];
+
+        foreach ($pairs as $pair) {
+            $bucket = $pair[$key] ?? null;
+
+            if (! is_string($bucket) || $bucket === '') {
+                continue;
+            }
+
+            $map[$bucket] = (int) ($pair['total'] ?? 0);
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param  array<string, int>  $totals
+     * @param  list<string>  $buckets
+     */
+    private function sumBuckets(array $totals, array $buckets): int
+    {
+        $sum = 0;
+
+        foreach ($buckets as $bucket) {
+            $sum += (int) ($totals[$bucket] ?? 0);
+        }
+
+        return $sum;
+    }
+
+    private function percentage(int $numerator, int $denominator): float
+    {
+        if ($denominator <= 0) {
+            return 0.0;
+        }
+
+        return round(($numerator / $denominator) * 100, 2);
+    }
+
+    /**
      * @param  array<int, mixed>  $candidates
      */
     private function latestTimestamp(array $candidates): ?string
@@ -838,7 +938,68 @@ class WhatsappOperationsController extends Controller
             'rate_limit',
             'unsupported_feature',
             'timeout_error',
+            'transient_network_error',
         ];
+    }
+
+    /**
+     * @return array{
+     *     totals: array{scheduled:int,executed:int},
+     *     by_provider: array<string, array{scheduled:int,executed:int}>
+     * }
+     */
+    private function fallbackEventMetrics(\App\Application\DTOs\OperationalWindow $window, ?string $providerFilter = null): array
+    {
+        $totals = [
+            'scheduled' => 0,
+            'executed' => 0,
+        ];
+        $byProvider = [];
+
+        $events = EventLog::query()
+            ->whereIn('event_name', [
+                'whatsapp.message.fallback.scheduled',
+                'whatsapp.message.fallback.executed',
+            ])
+            ->whereBetween('occurred_at', [$window->startedAt, $window->endedAt])
+            ->get();
+
+        foreach ($events as $event) {
+            $bucket = match ($event->event_name) {
+                'whatsapp.message.fallback.scheduled' => 'scheduled',
+                'whatsapp.message.fallback.executed' => 'executed',
+                default => null,
+            };
+
+            if ($bucket === null) {
+                continue;
+            }
+
+            $provider = data_get($event->context_json, 'provider');
+
+            if (! is_string($provider) || $provider === '') {
+                continue;
+            }
+
+            if ($providerFilter !== null && $provider !== $providerFilter) {
+                continue;
+            }
+
+            $totals[$bucket]++;
+            $byProvider[$provider][$bucket] = (int) (($byProvider[$provider][$bucket] ?? 0) + 1);
+            $byProvider[$provider]['scheduled'] = (int) ($byProvider[$provider]['scheduled'] ?? 0);
+            $byProvider[$provider]['executed'] = (int) ($byProvider[$provider]['executed'] ?? 0);
+        }
+
+        return [
+            'totals' => $totals,
+            'by_provider' => $byProvider,
+        ];
+    }
+
+    private function isOperationalSignal(string $errorCode): bool
+    {
+        return in_array($errorCode, $this->monitoredAttemptErrorCodes(), true);
     }
 
     private function queueTypeMatches(WhatsappOperationalQueryRequest $request, string $type): bool

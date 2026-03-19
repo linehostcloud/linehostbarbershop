@@ -12,20 +12,26 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
     const boot = JSON.parse(bootNode.textContent || '{}');
     const state = {
         window: boot.filters?.window || '24h',
-        queueProvider: boot.filters?.queue_provider || '',
+        provider: boot.filters?.provider || '',
         queueStatus: boot.filters?.queue_status || '',
         queueErrorCode: boot.filters?.queue_error_code || '',
+        feedType: boot.filters?.feed_type || '',
+        feedSource: boot.filters?.feed_source || '',
         queuePage: normalizePositiveInteger(boot.filters?.queue_page, 1),
         boundaryPage: normalizePositiveInteger(boot.filters?.boundary_page, 1),
         feedPage: normalizePositiveInteger(boot.filters?.feed_page, 1),
+        autoRefresh: Boolean(boot.filters?.auto_refresh),
         providerOptions: [],
+        autoRefreshTimer: null,
     };
 
     const elements = {
         globalError: rootElement.querySelector('[data-global-error]'),
         lastUpdated: rootElement.querySelector('[data-last-updated]'),
+        autoRefreshState: rootElement.querySelector('[data-auto-refresh-state]'),
         summary: rootElement.querySelector('[data-section="summary"]'),
         providers: rootElement.querySelector('[data-section="providers"]'),
+        attention: rootElement.querySelector('[data-section="attention"]'),
         queue: rootElement.querySelector('[data-section="queue"]'),
         boundarySummary: rootElement.querySelector('[data-section="boundary-summary"]'),
         boundaryList: rootElement.querySelector('[data-section="boundary-list"]'),
@@ -34,24 +40,62 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         boundaryPagination: rootElement.querySelector('[data-pagination="boundary"]'),
         feedPagination: rootElement.querySelector('[data-pagination="feed"]'),
         window: rootElement.querySelector('[data-control="window"]'),
-        queueProvider: rootElement.querySelector('[data-control="queue-provider"]'),
+        provider: rootElement.querySelector('[data-control="provider"]'),
+        autoRefresh: rootElement.querySelector('[data-control="auto-refresh"]'),
         queueStatus: rootElement.querySelector('[data-control="queue-status"]'),
         queueErrorCode: rootElement.querySelector('[data-control="queue-error-code"]'),
         queueForm: rootElement.querySelector('[data-form="queue-filters"]'),
+        feedSource: rootElement.querySelector('[data-control="feed-source"]'),
+        feedType: rootElement.querySelector('[data-control="feed-type"]'),
+        feedForm: rootElement.querySelector('[data-form="feed-filters"]'),
     };
 
     syncControls();
     bindEvents();
+    configureAutoRefresh();
     loadAllSections();
+
+    window.addEventListener('beforeunload', () => {
+        stopAutoRefresh();
+    });
 
     function bindEvents() {
         elements.window?.addEventListener('change', (event) => {
             state.window = event.target.value || '24h';
-            state.queuePage = 1;
-            state.boundaryPage = 1;
-            state.feedPage = 1;
+            resetPaginatedSections();
             syncUrl();
             loadAllSections();
+        });
+
+        elements.provider?.addEventListener('change', (event) => {
+            state.provider = event.target.value || '';
+            resetPaginatedSections();
+            syncUrl();
+            loadAllSections();
+        });
+
+        elements.autoRefresh?.addEventListener('change', (event) => {
+            state.autoRefresh = Boolean(event.target.checked);
+            syncUrl();
+            configureAutoRefresh();
+        });
+
+        elements.queueForm?.addEventListener('submit', (event) => {
+            event.preventDefault();
+            state.queueStatus = elements.queueStatus?.value || '';
+            state.queueErrorCode = elements.queueErrorCode?.value || '';
+            state.queuePage = 1;
+            syncUrl();
+            loadQueue();
+        });
+
+        elements.feedForm?.addEventListener('submit', (event) => {
+            event.preventDefault();
+            state.feedSource = elements.feedSource?.value || '';
+            state.feedType = elements.feedType?.value || '';
+            state.feedPage = 1;
+            syncUrl();
+            loadFeed();
         });
 
         rootElement.addEventListener('click', (event) => {
@@ -69,13 +113,22 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             }
 
             if (action === 'queue-reset') {
-                state.queueProvider = '';
                 state.queueStatus = '';
                 state.queueErrorCode = '';
                 state.queuePage = 1;
                 syncControls();
                 syncUrl();
                 loadQueue();
+                return;
+            }
+
+            if (action === 'feed-reset') {
+                state.feedSource = '';
+                state.feedType = '';
+                state.feedPage = 1;
+                syncControls();
+                syncUrl();
+                loadFeed();
                 return;
             }
 
@@ -86,6 +139,8 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                     loadSummary();
                 } else if (section === 'providers') {
                     loadProviders();
+                } else if (section === 'attention') {
+                    loadAttention();
                 } else if (section === 'queue') {
                     loadQueue();
                 } else if (section === 'boundary') {
@@ -116,16 +171,12 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 }
             }
         });
+    }
 
-        elements.queueForm?.addEventListener('submit', (event) => {
-            event.preventDefault();
-            state.queueProvider = elements.queueProvider?.value || '';
-            state.queueStatus = elements.queueStatus?.value || '';
-            state.queueErrorCode = elements.queueErrorCode?.value || '';
-            state.queuePage = 1;
-            syncUrl();
-            loadQueue();
-        });
+    function resetPaginatedSections() {
+        state.queuePage = 1;
+        state.boundaryPage = 1;
+        state.feedPage = 1;
     }
 
     function syncControls() {
@@ -133,7 +184,11 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             elements.window.value = state.window;
         }
 
-        renderQueueProviderOptions();
+        renderProviderOptions();
+
+        if (elements.autoRefresh) {
+            elements.autoRefresh.checked = state.autoRefresh;
+        }
 
         if (elements.queueStatus) {
             elements.queueStatus.value = state.queueStatus;
@@ -142,20 +197,51 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         if (elements.queueErrorCode) {
             elements.queueErrorCode.value = state.queueErrorCode;
         }
+
+        if (elements.feedSource) {
+            elements.feedSource.value = state.feedSource;
+        }
+
+        if (elements.feedType) {
+            elements.feedType.value = state.feedType;
+        }
     }
 
     function syncUrl() {
         const url = new URL(window.location.href);
 
         applyUrlParam(url, 'window', state.window, '24h');
-        applyUrlParam(url, 'queue_provider', state.queueProvider);
+        applyUrlParam(url, 'provider', state.provider);
         applyUrlParam(url, 'queue_status', state.queueStatus);
         applyUrlParam(url, 'queue_error_code', state.queueErrorCode);
+        applyUrlParam(url, 'feed_source', state.feedSource);
+        applyUrlParam(url, 'feed_type', state.feedType);
         applyUrlParam(url, 'queue_page', state.queuePage, 1);
         applyUrlParam(url, 'boundary_page', state.boundaryPage, 1);
         applyUrlParam(url, 'feed_page', state.feedPage, 1);
+        applyUrlParam(url, 'auto_refresh', state.autoRefresh ? '1' : '');
+        url.searchParams.delete('queue_provider');
 
         window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+    }
+
+    function configureAutoRefresh() {
+        stopAutoRefresh();
+
+        if (state.autoRefresh) {
+            state.autoRefreshTimer = window.setInterval(() => {
+                loadAllSections();
+            }, 60000);
+        }
+
+        updateAutoRefreshState();
+    }
+
+    function stopAutoRefresh() {
+        if (state.autoRefreshTimer !== null) {
+            window.clearInterval(state.autoRefreshTimer);
+            state.autoRefreshTimer = null;
+        }
     }
 
     async function loadAllSections() {
@@ -164,6 +250,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         const results = await Promise.allSettled([
             loadSummary(),
             loadProviders(),
+            loadAttention(),
             loadQueue(),
             loadBoundary(),
             loadFeed(),
@@ -174,17 +261,18 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         }
 
         if (results.every((result) => result.status === 'rejected')) {
-            showGlobalError('Nao foi possivel carregar os dados operacionais desta tela. Use o botao de recarregar para tentar novamente.');
+            showGlobalError('Nao foi possivel carregar os dados operacionais desta tela. Revise a sessao do tenant e tente atualizar manualmente.');
         }
     }
 
     async function loadSummary() {
-        renderLoading(elements.summary, 'Carregando resumo operacional...');
+        renderLoading(elements.summary, 'Carregando indicadores operacionais...');
 
         try {
-            const response = await getJson(boot.urls.summary, {
+            const response = await getJson(boot.urls.summary, compactParams({
                 window: state.window,
-            });
+                provider: state.provider || undefined,
+            }));
 
             renderSummary(response.data);
             return response;
@@ -198,16 +286,19 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         renderLoading(elements.providers, 'Carregando saude dos providers...');
 
         try {
-            const response = await getJson(boot.urls.providers, {
+            const response = await getJson(boot.urls.providers, compactParams({
                 window: state.window,
-            });
+            }));
+            const items = Array.isArray(response.data) ? response.data : [];
 
-            state.providerOptions = Array.isArray(response.data)
-                ? response.data.map((item) => item.provider).filter(Boolean).filter(uniqueOnly)
-                : [];
+            state.providerOptions = items
+                .map((item) => item.provider)
+                .filter(Boolean)
+                .filter(uniqueOnly)
+                .sort((left, right) => String(left).localeCompare(String(right)));
 
             syncControls();
-            renderProviders(response.data || []);
+            renderProviders(items);
             return response;
         } catch (error) {
             renderSectionError(elements.providers, friendlyError(error, 'Nao foi possivel carregar a saude dos providers.'), 'providers');
@@ -215,9 +306,31 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         }
     }
 
+    async function loadAttention() {
+        renderLoading(elements.attention, 'Carregando itens que exigem atencao...');
+
+        try {
+            const response = await getJson(boot.urls.queue, compactParams({
+                window: state.window,
+                provider: state.provider || undefined,
+                page: 1,
+                per_page: 4,
+            }));
+
+            renderAttention(response.data || []);
+            return response;
+        } catch (error) {
+            renderSectionError(elements.attention, friendlyError(error, 'Nao foi possivel carregar o recorte de atencao imediata.'), 'attention');
+            throw error;
+        }
+    }
+
     async function loadQueue() {
         renderLoading(elements.queue, 'Carregando fila operacional...');
-        elements.queuePagination.innerHTML = '';
+
+        if (elements.queuePagination) {
+            elements.queuePagination.innerHTML = '';
+        }
 
         try {
             const response = await getJson(boot.urls.queue, queueParams());
@@ -240,15 +353,18 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         if (results.every((result) => result.status === 'rejected')) {
             throw new Error('boundary_failed');
         }
+
+        return results;
     }
 
     async function loadBoundarySummary() {
-        renderLoading(elements.boundarySummary, 'Carregando resumo de rejeicoes...');
+        renderLoading(elements.boundarySummary, 'Carregando resumo de boundary rejections...');
 
         try {
-            const response = await getJson(boot.urls.boundary_summary, {
+            const response = await getJson(boot.urls.boundary_summary, compactParams({
                 window: state.window,
-            });
+                provider: state.provider || undefined,
+            }));
 
             renderBoundarySummary(response.data);
             return response;
@@ -260,14 +376,18 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
     async function loadBoundaryList() {
         renderLoading(elements.boundaryList, 'Carregando rejeicoes recentes...');
-        elements.boundaryPagination.innerHTML = '';
+
+        if (elements.boundaryPagination) {
+            elements.boundaryPagination.innerHTML = '';
+        }
 
         try {
-            const response = await getJson(boot.urls.boundary_rejections, {
+            const response = await getJson(boot.urls.boundary_rejections, compactParams({
                 window: state.window,
+                provider: state.provider || undefined,
                 page: state.boundaryPage,
                 per_page: 6,
-            });
+            }));
 
             renderBoundaryList(response.data || []);
             renderPagination(elements.boundaryPagination, 'boundary', response.meta);
@@ -279,21 +399,27 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
     }
 
     async function loadFeed() {
-        renderLoading(elements.feed, 'Carregando feed recente...');
-        elements.feedPagination.innerHTML = '';
+        renderLoading(elements.feed, 'Carregando feed operacional...');
+
+        if (elements.feedPagination) {
+            elements.feedPagination.innerHTML = '';
+        }
 
         try {
-            const response = await getJson(boot.urls.feed, {
+            const response = await getJson(boot.urls.feed, compactParams({
                 window: state.window,
+                provider: state.provider || undefined,
+                source: state.feedSource || undefined,
+                type: state.feedType || undefined,
                 page: state.feedPage,
                 per_page: 10,
-            });
+            }));
 
             renderFeed(response.data || []);
             renderPagination(elements.feedPagination, 'feed', response.meta);
             return response;
         } catch (error) {
-            renderSectionError(elements.feed, friendlyError(error, 'Nao foi possivel carregar o feed recente.'), 'feed');
+            renderSectionError(elements.feed, friendlyError(error, 'Nao foi possivel carregar o feed operacional.'), 'feed');
             throw error;
         }
     }
@@ -301,11 +427,11 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
     function queueParams() {
         return compactParams({
             window: state.window,
-            page: state.queuePage,
-            per_page: 8,
-            provider: state.queueProvider || undefined,
+            provider: state.provider || undefined,
             status: state.queueStatus || undefined,
             error_code: state.queueErrorCode || undefined,
+            page: state.queuePage,
+            per_page: 8,
         });
     }
 
@@ -321,7 +447,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             return response.data;
         } catch (error) {
             if (error?.response?.status === 401 || error?.response?.status === 403) {
-                showGlobalError('A sessao do painel expirou ou nao possui mais permissao para consultar esta operacao. Atualize a pagina ou faca login novamente.');
+                showGlobalError('A sessao do painel expirou ou nao possui mais permissao para esta operacao. Atualize a pagina ou faca login novamente.');
             }
 
             throw error;
@@ -329,28 +455,63 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
     }
 
     function renderSummary(payload) {
+        const cards = payload?.operational_cards || {};
         const sections = [
             {
-                title: 'Mensagens',
-                total: payload?.messages?.total || 0,
-                rows: summarizeRows(payload?.messages?.status_totals || [], 'status'),
+                title: 'Mensagens recentes',
+                value: cards.messages_recent_total || 0,
+                tone: 'slate',
+                caption: 'Mensagens WhatsApp observadas na janela.',
+                rows: summarizeRows(payload?.messages?.status_totals || [], 'status', 4),
             },
             {
-                title: 'Outbox',
-                total: payload?.outbox_events?.total || 0,
-                rows: summarizeRows(payload?.outbox_events?.status_totals || [], 'status'),
+                title: 'Tentativas recentes',
+                value: cards.attempts_recent_total || 0,
+                tone: 'slate',
+                caption: 'Tentativas de envio e integracao no periodo.',
+                rows: summarizeRows(payload?.integration_attempts?.status_totals || [], 'status', 4),
             },
             {
-                title: 'Tentativas',
-                total: payload?.integration_attempts?.total || 0,
-                rows: summarizeRows(payload?.integration_attempts?.error_code_totals?.length
-                    ? payload?.integration_attempts?.error_code_totals
-                    : payload?.integration_attempts?.status_totals || [], payload?.integration_attempts?.error_code_totals?.length ? 'error_code' : 'status'),
+                title: 'Falhas operacionais',
+                value: cards.operational_failures_total || 0,
+                tone: Number(cards.operational_failures_total || 0) > 0 ? 'rose' : 'emerald',
+                caption: `${formatPercent(cards.operational_failure_rate)} da janela monitorada.`,
+                rows: [],
             },
             {
-                title: 'Boundary',
-                total: payload?.boundary_rejections?.total || 0,
-                rows: summarizeRows(payload?.boundary_rejections?.code_totals || [], 'code'),
+                title: 'Retries agendados',
+                value: cards.retry_scheduled_total || 0,
+                tone: Number(cards.retry_scheduled_total || 0) > 0 ? 'amber' : 'emerald',
+                caption: 'Tentativas que seguiram para nova rodada controlada.',
+                rows: [],
+            },
+            {
+                title: 'Fallbacks agendados',
+                value: cards.fallback_scheduled_total || 0,
+                tone: Number(cards.fallback_scheduled_total || 0) > 0 ? 'amber' : 'emerald',
+                caption: 'Troca controlada para provider secundario.',
+                rows: [],
+            },
+            {
+                title: 'Fallbacks executados',
+                value: cards.fallback_executed_total || 0,
+                tone: Number(cards.fallback_executed_total || 0) > 0 ? 'amber' : 'emerald',
+                caption: 'Execucoes efetivas com secundario na janela.',
+                rows: [],
+            },
+            {
+                title: 'Boundary rejections',
+                value: cards.boundary_rejections_total || 0,
+                tone: Number(cards.boundary_rejections_total || 0) > 0 ? 'rose' : 'emerald',
+                caption: 'Rejeicoes de boundary em endpoint, payload ou assinatura.',
+                rows: summarizeRows(payload?.boundary_rejections?.code_totals || [], 'code', 3),
+            },
+            {
+                title: 'Fila pendente',
+                value: cards.pending_queue_total || 0,
+                tone: Number(cards.pending_queue_total || 0) > 0 ? 'amber' : 'emerald',
+                caption: 'Outbox pendente, em processamento ou aguardando retry.',
+                rows: summarizeRows(filterRows(payload?.outbox_events?.status_totals || [], ['pending', 'processing', 'retry_scheduled']), 'status', 3),
             },
         ];
 
@@ -358,80 +519,142 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             <article class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
                 <div class="flex items-start justify-between gap-3">
                     <div>
-                        <h3 class="text-sm font-semibold text-slate-900">${e(section.title)}</h3>
-                        <p class="mt-1 text-2xl font-semibold tracking-tight text-slate-950">${e(String(section.total))}</p>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">${e(section.title)}</p>
+                        <p class="mt-2 text-3xl font-semibold tracking-tight text-slate-950">${e(String(section.value))}</p>
                     </div>
-                    <span class="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">Janela</span>
+                    ${badge(state.window, 'stone')}
                 </div>
-                <ul class="mt-4 space-y-2">
-                    ${section.rows.length > 0 ? section.rows.map((row) => `
-                        <li class="flex items-center justify-between gap-3 text-sm">
-                            <span class="truncate text-slate-600">${e(row.label)}</span>
-                            <span class="font-semibold text-slate-900">${e(String(row.total))}</span>
-                        </li>
-                    `).join('') : `
-                        <li class="text-sm text-slate-500">Nenhum registro na janela selecionada.</li>
-                    `}
-                </ul>
+                <p class="mt-3 text-sm text-slate-600">${e(section.caption)}</p>
+                <div class="mt-4 flex flex-wrap gap-1.5">
+                    ${section.rows.length > 0 ? section.rows.map((row) => badge(`${row.label} · ${row.total}`, section.tone)).join('') : '<span class="text-xs text-slate-500">Sem recorte adicional.</span>'}
+                </div>
             </article>
         `).join('');
     }
 
     function renderProviders(items) {
-        if (!Array.isArray(items) || items.length === 0) {
-            renderEmpty(elements.providers, 'Nenhum provider configurado para esta janela operacional.');
+        const filteredItems = filterProviderItems(items, state.provider);
+
+        if (!Array.isArray(filteredItems) || filteredItems.length === 0) {
+            renderEmpty(elements.providers, state.provider
+                ? 'Nenhuma configuracao operacional encontrada para o provider filtrado.'
+                : 'Nenhum provider configurado para esta operacao.');
             return;
         }
 
-        elements.providers.innerHTML = `
-            <table class="min-w-full border-separate border-spacing-0 text-left text-sm">
-                <thead>
-                    <tr class="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Provider</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Slot</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Estado</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Capabilities</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Healthcheck</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Sucesso / Falha</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Principais erros</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Ultima atividade</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${items.map((item) => `
-                        <tr class="align-top">
-                            <td class="border-b border-stone-100 px-3 py-3">
-                                <div class="font-semibold text-slate-900">${e(item.provider)}</div>
-                            </td>
-                            <td class="border-b border-stone-100 px-3 py-3 text-slate-600">${e(item.slot)}</td>
-                            <td class="border-b border-stone-100 px-3 py-3">
-                                ${badge(item.enabled ? 'ativo' : 'inativo', item.enabled ? 'emerald' : 'stone')}
-                            </td>
-                            <td class="border-b border-stone-100 px-3 py-3">
-                                <div class="flex flex-wrap gap-1.5">
-                                    ${(item.enabled_capabilities || []).length > 0 ? item.enabled_capabilities.map((capability) => badge(capability, 'stone')).join('') : '<span class="text-slate-500">Sem capabilities.</span>'}
+        elements.providers.innerHTML = filteredItems.map((item) => {
+            const operationalState = item.operational_state || {
+                label: 'unknown',
+                tone: 'stone',
+                reason: 'Sem sinais suficientes para classificar o provider.',
+            };
+
+            return `
+                <article class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
+                    <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                        <div class="min-w-0">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h3 class="text-base font-semibold text-slate-950">${e(item.provider || 'n/d')}</h3>
+                                ${badge(item.slot || 'sem slot', 'slate')}
+                                ${badge(item.enabled ? 'enabled' : 'disabled', item.enabled ? 'emerald' : 'stone')}
+                            </div>
+                            <p class="mt-2 text-sm leading-6 text-slate-600">${e(operationalState.reason || 'Sem explicacao operacional disponivel.')}</p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            ${badge(operationalState.label || 'unknown', stateTone(operationalState.tone))}
+                            ${renderInlineHealthBadge(item.last_healthcheck)}
+                        </div>
+                    </div>
+
+                    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                        ${metricTile('Sucessos', item.success_attempts || 0, `${formatPercent(item.success_rate)} de sucesso`, 'emerald')}
+                        ${metricTile('Falhas', item.failure_attempts || 0, `${formatPercent(item.failure_rate)} de falha`, Number(item.failure_attempts || 0) > 0 ? 'rose' : 'stone')}
+                        ${metricTile('Retries', item.retry_scheduled_total || 0, 'Retries recentes na janela', Number(item.retry_scheduled_total || 0) > 0 ? 'amber' : 'stone')}
+                        ${metricTile('Fallbacks', Number(item.fallback_scheduled_total || 0) + Number(item.fallback_executed_total || 0), `${item.fallback_scheduled_total || 0} agendados · ${item.fallback_executed_total || 0} executados`, Number(item.fallback_scheduled_total || 0) + Number(item.fallback_executed_total || 0) > 0 ? 'amber' : 'stone')}
+                        ${metricTile('Volume', item.send_attempts_total || 0, 'Tentativas totais do provider', 'slate')}
+                    </div>
+
+                    <div class="mt-4 grid gap-3 xl:grid-cols-[1.06fr_0.94fr]">
+                        <div class="space-y-3">
+                            <div>
+                                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Capabilities</p>
+                                <div class="mt-2 flex flex-wrap gap-1.5">
+                                    ${(item.enabled_capabilities || []).length > 0
+                                        ? item.enabled_capabilities.map((capability) => badge(capability, 'stone')).join('')
+                                        : '<span class="text-sm text-slate-500">Sem capabilities habilitadas.</span>'}
                                 </div>
-                            </td>
-                            <td class="border-b border-stone-100 px-3 py-3">
-                                ${renderHealthcheck(item.last_healthcheck)}
-                            </td>
-                            <td class="border-b border-stone-100 px-3 py-3">
-                                <div class="space-y-1">
-                                    <div class="font-medium text-slate-900">${formatPercent(item.success_rate)} / ${formatPercent(item.failure_rate)}</div>
-                                    <div class="text-xs text-slate-500">${e(String(item.success_attempts || 0))} ok · ${e(String(item.failure_attempts || 0))} falhas</div>
+                            </div>
+
+                            <div>
+                                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Sinais Operacionais</p>
+                                <div class="mt-2 flex flex-wrap gap-1.5">
+                                    ${(item.signal_totals || []).length > 0
+                                        ? item.signal_totals.map((signal) => badge(`${signal.code} · ${signal.total}`, errorTone(signal.code))).join('')
+                                        : '<span class="text-sm text-slate-500">Nenhum sinal critico agregado.</span>'}
                                 </div>
-                            </td>
-                            <td class="border-b border-stone-100 px-3 py-3">
-                                <div class="flex flex-wrap gap-1.5">
-                                    ${(item.top_error_codes || []).length > 0 ? item.top_error_codes.map((entry) => badge(`${entry.code} · ${entry.total}`, 'amber')).join('') : '<span class="text-slate-500">Sem erros relevantes.</span>'}
+                            </div>
+
+                            <div>
+                                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Principais Erros</p>
+                                <div class="mt-2 flex flex-wrap gap-1.5">
+                                    ${(item.top_error_codes || []).length > 0
+                                        ? item.top_error_codes.map((entry) => badge(`${entry.code} · ${entry.total}`, errorTone(entry.code))).join('')
+                                        : '<span class="text-sm text-slate-500">Sem erros relevantes na janela.</span>'}
                                 </div>
-                            </td>
-                            <td class="border-b border-stone-100 px-3 py-3 text-slate-600">${formatDateTime(item.last_activity_at)}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
+                            </div>
+                        </div>
+
+                        <div class="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ultimos Sinais</p>
+                            <dl class="mt-3 space-y-2 text-sm">
+                                ${providerDetailRow('Healthcheck', healthcheckText(item.last_healthcheck))}
+                                ${providerDetailRow('Ultima atividade', formatDateTime(item.last_activity_at))}
+                                ${providerDetailRow('Ultima validacao', formatDateTime(item.last_validated_at))}
+                                ${providerDetailRow('Atualizado em', formatDateTime(item.updated_at))}
+                            </dl>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }).join('');
+    }
+
+    function renderAttention(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            renderEmpty(elements.attention, 'Nenhum item critico apareceu na janela atual para este recorte.');
+            return;
+        }
+
+        const attentionItems = [...items]
+            .sort((left, right) => compareAttentionItems(left, right))
+            .slice(0, 4);
+
+        elements.attention.innerHTML = attentionItems.map((item) => `
+            <article class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="flex flex-wrap items-center gap-2">
+                        ${badge(attentionLabel(item.attention_type), attentionTone(item))}
+                        ${item.status ? badge(item.status, statusTone(item.status)) : ''}
+                        ${item.error_code ? badge(item.error_code, errorTone(item.error_code)) : ''}
+                    </div>
+                    <div class="text-xs font-medium text-slate-500">${formatDateTime(item.occurred_at)}</div>
+                </div>
+
+                <p class="mt-3 text-sm font-medium leading-6 text-slate-950">${e(item.summary || 'Sem resumo operacional.')}</p>
+
+                <div class="mt-3 flex flex-wrap gap-1.5">
+                    ${item.provider ? badge(item.provider, 'slate') : ''}
+                    ${item.slot ? badge(item.slot, 'stone') : ''}
+                    ${item.decision_source ? badge(`rota ${item.decision_source}`, 'stone') : ''}
+                    ${renderFallbackPill(item.fallback)}
+                </div>
+
+                <div class="mt-3 space-y-1 text-xs leading-5 text-slate-500">
+                    <div>${referenceSummary(item)}</div>
+                    ${queueOperationalNote(item) ? `<div>${e(queueOperationalNote(item))}</div>` : ''}
+                </div>
+            </article>
+        `).join('');
     }
 
     function renderQueue(items) {
@@ -446,8 +669,10 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                     <tr class="text-[11px] uppercase tracking-[0.18em] text-slate-500">
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Atencao</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Provider</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Status</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Codigo</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Estado Atual</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Tentativa</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Fallback</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Referencia</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Resumo</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Horario</th>
                     </tr>
@@ -456,16 +681,30 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                     ${items.map((item) => `
                         <tr class="align-top ${queueRowClass(item)}">
                             <td class="border-b border-stone-100 px-3 py-3">
-                                ${badge(attentionLabel(item.attention_type), attentionTone(item))}
+                                <div class="flex flex-wrap gap-1.5">
+                                    ${badge(attentionLabel(item.attention_type), attentionTone(item))}
+                                    ${severityBadge(item.severity)}
+                                </div>
                             </td>
                             <td class="border-b border-stone-100 px-3 py-3">
                                 <div class="font-medium text-slate-900">${e(item.provider || 'n/d')}</div>
-                                <div class="mt-1 text-xs text-slate-500">${e(item.slot || 'sem slot')}</div>
+                                <div class="mt-1 flex flex-wrap gap-1.5">
+                                    ${item.slot ? badge(item.slot, 'stone') : ''}
+                                    ${item.decision_source ? badge(`rota ${item.decision_source}`, 'stone') : ''}
+                                </div>
                             </td>
-                            <td class="border-b border-stone-100 px-3 py-3 text-slate-700">${e(item.status || 'n/d')}</td>
-                            <td class="border-b border-stone-100 px-3 py-3">${item.error_code ? badge(item.error_code, item.error_code === 'timeout_error' ? 'amber' : 'rose') : '<span class="text-slate-400">—</span>'}</td>
+                            <td class="border-b border-stone-100 px-3 py-3">
+                                <div class="flex flex-wrap gap-1.5">
+                                    ${item.status ? badge(item.status, statusTone(item.status)) : '<span class="text-slate-400">—</span>'}
+                                    ${item.error_code ? badge(item.error_code, errorTone(item.error_code)) : ''}
+                                </div>
+                            </td>
+                            <td class="border-b border-stone-100 px-3 py-3 text-slate-700">${e(queueAttemptLabel(item))}</td>
+                            <td class="border-b border-stone-100 px-3 py-3 text-slate-700">${renderFallbackCell(item.fallback)}</td>
+                            <td class="border-b border-stone-100 px-3 py-3 text-slate-700">${referenceCell(item)}</td>
                             <td class="border-b border-stone-100 px-3 py-3">
                                 <div class="max-w-md text-slate-700">${e(item.summary || 'Sem resumo operacional.')}</div>
+                                ${queueOperationalNote(item) ? `<div class="mt-1 text-xs text-slate-500">${e(queueOperationalNote(item))}</div>` : ''}
                             </td>
                             <td class="border-b border-stone-100 px-3 py-3 text-slate-600">${formatDateTime(item.occurred_at)}</td>
                         </tr>
@@ -479,6 +718,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         const codeTotals = payload?.code_totals || [];
         const directionTotals = payload?.direction_totals || [];
         const endpointTotals = payload?.endpoint_totals || [];
+        const latest = payload?.latest || [];
 
         elements.boundarySummary.innerHTML = `
             <div class="space-y-4">
@@ -487,29 +727,52 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Total</p>
                         <p class="text-3xl font-semibold tracking-tight text-slate-950">${e(String(payload?.total || 0))}</p>
                     </div>
-                    <div class="text-right text-xs text-slate-500">
-                        <div>Window ${e(payload?.window?.label || state.window)}</div>
-                    </div>
+                    ${badge(payload?.window?.label || state.window, 'stone')}
                 </div>
+
                 <div>
                     <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Codigos principais</p>
                     <div class="flex flex-wrap gap-1.5">
-                        ${codeTotals.length > 0 ? codeTotals.slice(0, 8).map((row) => badge(`${row.code} · ${row.total}`, 'rose')).join('') : '<span class="text-sm text-slate-500">Nenhuma rejeicao no periodo.</span>'}
+                        ${codeTotals.length > 0
+                            ? codeTotals.slice(0, 8).map((row) => badge(`${row.code} · ${row.total}`, errorTone(row.code))).join('')
+                            : '<span class="text-sm text-slate-500">Nenhuma rejeicao no periodo.</span>'}
                     </div>
                 </div>
+
                 <div class="grid gap-3 sm:grid-cols-2">
                     <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
                         <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Direcao</p>
                         <ul class="space-y-1.5">
-                            ${directionTotals.length > 0 ? directionTotals.map((row) => `<li class="flex justify-between gap-3 text-sm"><span class="text-slate-600">${e(row.direction)}</span><span class="font-semibold text-slate-900">${e(String(row.total))}</span></li>`).join('') : '<li class="text-sm text-slate-500">Sem distribuicao.</li>'}
+                            ${directionTotals.length > 0
+                                ? directionTotals.map((row) => `<li class="flex justify-between gap-3 text-sm"><span class="text-slate-600">${e(row.direction)}</span><span class="font-semibold text-slate-900">${e(String(row.total))}</span></li>`).join('')
+                                : '<li class="text-sm text-slate-500">Sem distribuicao.</li>'}
                         </ul>
                     </div>
                     <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
                         <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Endpoints</p>
                         <ul class="space-y-1.5">
-                            ${endpointTotals.length > 0 ? endpointTotals.slice(0, 4).map((row) => `<li class="flex justify-between gap-3 text-sm"><span class="truncate text-slate-600">${e(row.endpoint)}</span><span class="font-semibold text-slate-900">${e(String(row.total))}</span></li>`).join('') : '<li class="text-sm text-slate-500">Sem endpoints relevantes.</li>'}
+                            ${endpointTotals.length > 0
+                                ? endpointTotals.slice(0, 4).map((row) => `<li class="flex justify-between gap-3 text-sm"><span class="truncate text-slate-600">${e(row.endpoint)}</span><span class="font-semibold text-slate-900">${e(String(row.total))}</span></li>`).join('')
+                                : '<li class="text-sm text-slate-500">Sem endpoints relevantes.</li>'}
                         </ul>
                     </div>
+                </div>
+
+                <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
+                    <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ultimas rejeicoes</p>
+                    <ul class="space-y-2">
+                        ${latest.length > 0
+                            ? latest.slice(0, 3).map((item) => `
+                                <li class="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <span class="text-sm font-medium text-slate-900">${e(item.code || 'n/d')}</span>
+                                        <span class="text-xs text-slate-500">${formatDateTime(item.occurred_at)}</span>
+                                    </div>
+                                    <div class="mt-1 text-xs leading-5 text-slate-500">${e(item.endpoint || 'Sem endpoint')} · ${e(item.direction || 'n/d')}</div>
+                                </li>
+                            `).join('')
+                            : '<li class="text-sm text-slate-500">Nenhuma rejeicao recente.</li>'}
+                    </ul>
                 </div>
             </div>
         `;
@@ -528,17 +791,22 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Codigo</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Direcao</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Endpoint</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Provider</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Horario</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${items.map((item) => `
                         <tr class="align-top">
-                            <td class="border-b border-stone-100 px-3 py-3">${badge(item.code, item.code === 'webhook_signature_invalid' ? 'rose' : 'amber')}</td>
+                            <td class="border-b border-stone-100 px-3 py-3">${badge(item.code || 'n/d', errorTone(item.code))}</td>
                             <td class="border-b border-stone-100 px-3 py-3 text-slate-700">${e(item.direction || 'n/d')}</td>
                             <td class="border-b border-stone-100 px-3 py-3">
                                 <div class="max-w-md truncate font-medium text-slate-900">${e(item.endpoint || 'n/d')}</div>
                                 <div class="mt-1 text-xs text-slate-500">${e(item.message || '')}</div>
+                            </td>
+                            <td class="border-b border-stone-100 px-3 py-3">
+                                <div class="font-medium text-slate-900">${e(item.provider || 'n/d')}</div>
+                                <div class="mt-1 text-xs text-slate-500">${e(item.slot || 'sem slot')}</div>
                             </td>
                             <td class="border-b border-stone-100 px-3 py-3 text-slate-600">${formatDateTime(item.occurred_at)}</td>
                         </tr>
@@ -557,17 +825,26 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         elements.feed.innerHTML = `
             <div class="space-y-3">
                 ${items.map((item) => `
-                    <article class="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-                        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <article class="rounded-2xl border ${feedCardBorder(item)} bg-white px-4 py-3">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div class="min-w-0">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    ${badge(item.source, sourceTone(item.source))}
-                                    ${item.type ? badge(item.type, 'stone') : ''}
+                                <div class="flex flex-wrap gap-1.5">
+                                    ${badge(item.source || 'source', sourceTone(item.source))}
+                                    ${item.type ? badge(item.type, typeTone(item.type)) : ''}
+                                    ${severityBadge(item.severity)}
+                                    ${item.status ? badge(item.status, statusTone(item.status)) : ''}
+                                    ${item.error_code ? badge(item.error_code, errorTone(item.error_code)) : ''}
+                                    ${item.provider ? badge(item.provider, 'slate') : ''}
+                                    ${item.slot ? badge(item.slot, 'stone') : ''}
                                 </div>
-                                <p class="mt-2 text-sm font-medium text-slate-900">${e(item.message || 'Evento operacional')}</p>
-                                <p class="mt-1 text-sm text-slate-600">
-                                    ${e(composeFeedContext(item))}
-                                </p>
+
+                                <p class="mt-3 text-sm font-medium leading-6 text-slate-950">${e(item.message || 'Evento operacional')}</p>
+
+                                <div class="mt-3 flex flex-wrap gap-1.5">
+                                    ${feedReferenceBadges(item)}
+                                </div>
+
+                                ${feedSecondaryLine(item) ? `<p class="mt-2 text-xs leading-5 text-slate-500">${e(feedSecondaryLine(item))}</p>` : ''}
                             </div>
                             <div class="shrink-0 text-xs font-medium text-slate-500">${formatDateTime(item.occurred_at)}</div>
                         </div>
@@ -577,43 +854,29 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         `;
     }
 
-    function renderHealthcheck(lastHealthcheck) {
-        if (!lastHealthcheck) {
-            return '<span class="text-slate-500">Sem healthcheck conhecido.</span>';
-        }
-
-        return `
-            <div class="space-y-1">
-                <div>${badge(lastHealthcheck.healthy ? 'healthy' : 'unhealthy', lastHealthcheck.healthy ? 'emerald' : 'rose')}</div>
-                <div class="text-xs text-slate-500">${formatDateTime(lastHealthcheck.checked_at)}</div>
-            </div>
-        `;
-    }
-
-    function renderQueueProviderOptions() {
-        if (!elements.queueProvider) {
+    function renderProviderOptions() {
+        if (!elements.provider) {
             return;
         }
 
         const options = ['', ...state.providerOptions];
-        const selected = state.queueProvider;
 
-        if (selected && !options.includes(selected)) {
-            options.push(selected);
+        if (state.provider && !options.includes(state.provider)) {
+            options.push(state.provider);
         }
 
-        elements.queueProvider.innerHTML = options
+        elements.provider.innerHTML = options
             .filter(uniqueOnly)
             .map((provider) => `
-                <option value="${e(provider)}" ${provider === selected ? 'selected' : ''}>
-                    ${provider === '' ? 'Todos' : e(provider)}
+                <option value="${e(provider)}" ${provider === state.provider ? 'selected' : ''}>
+                    ${provider === '' ? 'Todos os providers' : e(provider)}
                 </option>
             `)
             .join('');
     }
 
     function renderPagination(container, target, meta) {
-        if (!container || !meta || (meta.last_page || 1) <= 1) {
+        if (!container || !meta || normalizePositiveInteger(meta.last_page, 1) <= 1) {
             if (container) {
                 container.innerHTML = '';
             }
@@ -622,12 +885,13 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         }
 
         const currentPage = normalizePositiveInteger(meta.current_page, 1);
+        const lastPage = normalizePositiveInteger(meta.last_page, 1);
         const previousPage = Math.max(1, currentPage - 1);
-        const nextPage = Math.min(normalizePositiveInteger(meta.last_page, 1), currentPage + 1);
+        const nextPage = Math.min(lastPage, currentPage + 1);
 
         container.innerHTML = `
             <div class="flex flex-col gap-2 border-t border-stone-200 pt-3 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-                <div>Pagina ${e(String(currentPage))} de ${e(String(meta.last_page || 1))} · ${e(String(meta.total || 0))} registros</div>
+                <div>Pagina ${e(String(currentPage))} de ${e(String(lastPage))} · ${e(String(meta.total || 0))} registros</div>
                 <div class="flex gap-2">
                     <button
                         type="button"
@@ -644,7 +908,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         data-action="paginate"
                         data-pagination-target="${e(target)}"
                         data-page="${e(String(nextPage))}"
-                        ${currentPage >= (meta.last_page || 1) ? 'disabled' : ''}
+                        ${currentPage >= lastPage ? 'disabled' : ''}
                         class="inline-flex items-center justify-center rounded-2xl border border-stone-300 bg-white px-3 py-2 font-medium text-slate-700 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                         Proxima
@@ -706,6 +970,16 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         elements.lastUpdated.textContent = formatDateTime(new Date().toISOString());
     }
 
+    function updateAutoRefreshState() {
+        if (!elements.autoRefreshState) {
+            return;
+        }
+
+        elements.autoRefreshState.textContent = state.autoRefresh
+            ? 'Auto refresh 60s ativo'
+            : 'Auto refresh desligado';
+    }
+
     function showGlobalError(message) {
         if (!elements.globalError) {
             return;
@@ -722,6 +996,127 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
         elements.globalError.textContent = '';
         elements.globalError.classList.add('hidden');
+    }
+}
+
+function filterProviderItems(items, provider) {
+    if (!Array.isArray(items)) {
+        return [];
+    }
+
+    if (!provider) {
+        return items;
+    }
+
+    return items.filter((item) => item?.provider === provider);
+}
+
+function filterRows(rows, allowed) {
+    if (!Array.isArray(rows)) {
+        return [];
+    }
+
+    return rows.filter((row) => allowed.includes(row?.status));
+}
+
+function summarizeRows(rows, key, limit = 5) {
+    if (!Array.isArray(rows)) {
+        return [];
+    }
+
+    return rows.slice(0, limit).map((row) => ({
+        label: row?.[key] || 'n/d',
+        total: row?.total || 0,
+    }));
+}
+
+function metricTile(label, value, caption, tone) {
+    return `
+        <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">${e(label)}</p>
+            <p class="mt-2 text-2xl font-semibold tracking-tight text-slate-950">${e(String(value))}</p>
+            <p class="mt-1 text-xs leading-5 ${metricCaptionClass(tone)}">${e(caption)}</p>
+        </div>
+    `;
+}
+
+function metricCaptionClass(tone) {
+    switch (tone) {
+        case 'emerald':
+            return 'text-emerald-700';
+        case 'rose':
+            return 'text-rose-700';
+        case 'amber':
+            return 'text-amber-700';
+        default:
+            return 'text-slate-500';
+    }
+}
+
+function providerDetailRow(label, value) {
+    return `
+        <div class="flex items-start justify-between gap-3">
+            <dt class="text-slate-500">${e(label)}</dt>
+            <dd class="max-w-[16rem] text-right font-medium text-slate-900">${e(value)}</dd>
+        </div>
+    `;
+}
+
+function renderInlineHealthBadge(lastHealthcheck) {
+    if (!lastHealthcheck) {
+        return badge('sem healthcheck', 'stone');
+    }
+
+    return badge(
+        lastHealthcheck.healthy ? 'healthcheck ok' : 'healthcheck falhou',
+        lastHealthcheck.healthy ? 'emerald' : 'rose',
+    );
+}
+
+function healthcheckText(lastHealthcheck) {
+    if (!lastHealthcheck) {
+        return 'Sem healthcheck conhecido.';
+    }
+
+    const notes = [
+        lastHealthcheck.healthy ? 'healthy' : 'unhealthy',
+    ];
+
+    if (lastHealthcheck.http_status) {
+        notes.push(`HTTP ${lastHealthcheck.http_status}`);
+    }
+
+    if (lastHealthcheck.latency_ms) {
+        notes.push(`${lastHealthcheck.latency_ms}ms`);
+    }
+
+    if (lastHealthcheck.error_code) {
+        notes.push(lastHealthcheck.error_code);
+    }
+
+    const checkedAt = formatDateTime(lastHealthcheck.checked_at);
+
+    return `${notes.join(' · ')} · ${checkedAt}`;
+}
+
+function compareAttentionItems(left, right) {
+    const severityDelta = attentionRank(right?.severity) - attentionRank(left?.severity);
+
+    if (severityDelta !== 0) {
+        return severityDelta;
+    }
+
+    return String(right?.occurred_at || '').localeCompare(String(left?.occurred_at || ''));
+}
+
+function attentionRank(severity) {
+    switch (severity) {
+        case 'high':
+            return 3;
+        case 'medium':
+            return 2;
+        default:
+            return 1;
     }
 }
 
@@ -743,75 +1138,335 @@ function attentionLabel(type) {
 }
 
 function attentionTone(item) {
-    if (item.attention_type === 'outbox_manual_review_required' || item.error_code === 'provider_unavailable') {
+    if (item.attention_type === 'outbox_manual_review_required' || item.attention_type === 'message_terminal_failure') {
         return 'rose';
     }
 
-    if (item.error_code === 'timeout_error' || item.error_code === 'rate_limit') {
+    if (item.error_code === 'provider_unavailable' || item.error_code === 'unsupported_feature') {
+        return 'rose';
+    }
+
+    if (
+        item.error_code === 'timeout_error'
+        || item.error_code === 'rate_limit'
+        || item.error_code === 'transient_network_error'
+        || item.attention_type === 'outbox_reclaimed_recently'
+    ) {
         return 'amber';
     }
 
     return 'stone';
 }
 
-function queueRowClass(item) {
-    if (item.attention_type === 'outbox_manual_review_required' || item.error_code === 'provider_unavailable') {
-        return 'bg-rose-50/40';
+function severityBadge(severity) {
+    if (!severity) {
+        return '';
     }
 
-    if (item.error_code === 'timeout_error' || item.error_code === 'rate_limit' || item.attention_type === 'outbox_reclaimed_recently') {
-        return 'bg-amber-50/35';
-    }
-
-    return '';
+    return badge(severity, severityTone(severity));
 }
 
-function sourceTone(source) {
-    switch (source) {
-        case 'admin_audit':
-            return 'stone';
-        case 'event_log':
-            return 'amber';
-        case 'boundary_rejection_audit':
+function severityTone(severity) {
+    switch (severity) {
+        case 'high':
             return 'rose';
-        case 'integration_attempt':
+        case 'medium':
+            return 'amber';
+        case 'info':
             return 'slate';
         default:
             return 'stone';
     }
 }
 
-function summarizeRows(rows, key) {
-    if (!Array.isArray(rows)) {
-        return [];
+function statusTone(status) {
+    switch (status) {
+        case 'succeeded':
+        case 'processed':
+        case 'delivered':
+        case 'healthy':
+            return 'emerald';
+        case 'failed':
+        case 'unhealthy':
+            return 'rose';
+        case 'retry_scheduled':
+        case 'fallback_scheduled':
+        case 'queued':
+        case 'processing':
+            return 'amber';
+        default:
+            return 'stone';
     }
-
-    return rows.slice(0, 5).map((row) => ({
-        label: row?.[key] || 'n/d',
-        total: row?.total || 0,
-    }));
 }
 
-function composeFeedContext(item) {
-    const parts = [];
+function stateTone(tone) {
+    return tone || 'stone';
+}
 
-    if (item.provider) {
-        parts.push(`provider ${item.provider}`);
+function sourceTone(source) {
+    switch (source) {
+        case 'event_log':
+            return 'amber';
+        case 'boundary_rejection_audit':
+            return 'rose';
+        case 'integration_attempt':
+            return 'slate';
+        case 'admin_audit':
+            return 'stone';
+        default:
+            return 'stone';
+    }
+}
+
+function typeTone(type) {
+    switch (type) {
+        case 'provider_fallback_scheduled':
+        case 'provider_fallback_executed':
+        case 'outbox_reclaimed':
+            return 'amber';
+        case 'terminal_failure':
+        case 'boundary_rejection':
+        case 'manual_review_required':
+        case 'provider_config_deactivated':
+            return 'rose';
+        case 'provider_healthcheck':
+        case 'provider_config_activated':
+            return 'slate';
+        default:
+            return 'stone';
+    }
+}
+
+function errorTone(code) {
+    switch (code) {
+        case 'provider_unavailable':
+        case 'unsupported_feature':
+        case 'webhook_signature_invalid':
+        case 'payload_validation_failed':
+            return 'rose';
+        case 'rate_limit':
+        case 'timeout_error':
+        case 'transient_network_error':
+            return 'amber';
+        default:
+            return 'stone';
+    }
+}
+
+function queueRowClass(item) {
+    if (item.attention_type === 'outbox_manual_review_required' || item.attention_type === 'message_terminal_failure') {
+        return 'bg-rose-50/40';
     }
 
-    if (item.slot) {
-        parts.push(`slot ${item.slot}`);
+    if (
+        item.error_code === 'provider_unavailable'
+        || item.error_code === 'unsupported_feature'
+        || item.error_code === 'timeout_error'
+        || item.error_code === 'rate_limit'
+        || item.error_code === 'transient_network_error'
+        || item.attention_type === 'outbox_reclaimed_recently'
+    ) {
+        return 'bg-amber-50/35';
+    }
+
+    return '';
+}
+
+function queueAttemptLabel(item) {
+    const details = item?.details || {};
+
+    if (details.attempt_count && details.max_attempts) {
+        return `${details.attempt_count}/${details.max_attempts}`;
+    }
+
+    if (details.attempt_count) {
+        return String(details.attempt_count);
+    }
+
+    if (details.reclaim_count) {
+        return `reclaim ${details.reclaim_count}`;
+    }
+
+    return '—';
+}
+
+function renderFallbackPill(fallback) {
+    if (!fallback || typeof fallback !== 'object') {
+        return '';
+    }
+
+    return badge(`fallback ${fallbackLabel(fallback)}`, 'amber');
+}
+
+function renderFallbackCell(fallback) {
+    if (!fallback || typeof fallback !== 'object') {
+        return '<span class="text-slate-400">—</span>';
+    }
+
+    return `
+        <div class="space-y-1">
+            <div class="font-medium text-slate-900">${e(fallbackLabel(fallback))}</div>
+            ${fallback.trigger_error_code ? `<div class="text-xs text-slate-500">${e(fallback.trigger_error_code)}</div>` : ''}
+        </div>
+    `;
+}
+
+function fallbackLabel(fallback) {
+    const fromProvider = fallback.from_provider || 'n/d';
+    const toProvider = fallback.to_provider || 'n/d';
+    const toSlot = fallback.to_slot ? `/${fallback.to_slot}` : '';
+
+    return `${fromProvider} -> ${toProvider}${toSlot}`;
+}
+
+function referenceSummary(item) {
+    const references = [
+        item.message_id ? `mensagem ${shortReference(item.message_id)}` : null,
+        item.outbox_event_id ? `outbox ${shortReference(item.outbox_event_id)}` : null,
+        item.integration_attempt_id ? `attempt ${shortReference(item.integration_attempt_id)}` : null,
+    ].filter(Boolean);
+
+    return references.length > 0 ? references.join(' · ') : 'Sem referencia adicional.';
+}
+
+function referenceCell(item) {
+    const references = [
+        item.message_id ? `mensagem ${shortReference(item.message_id)}` : null,
+        item.outbox_event_id ? `outbox ${shortReference(item.outbox_event_id)}` : null,
+        item.integration_attempt_id ? `attempt ${shortReference(item.integration_attempt_id)}` : null,
+    ].filter(Boolean);
+
+    if (references.length === 0) {
+        return '<span class="text-slate-400">—</span>';
+    }
+
+    return `
+        <div class="space-y-1 text-xs text-slate-600">
+            ${references.map((reference) => `<div>${e(reference)}</div>`).join('')}
+        </div>
+    `;
+}
+
+function queueOperationalNote(item) {
+    const details = item?.details || {};
+    const notes = [];
+
+    if (details.last_reclaim_reason) {
+        notes.push(`reclaim ${details.last_reclaim_reason}`);
+    }
+
+    if (details.provider_status) {
+        notes.push(`provider status ${details.provider_status}`);
+    }
+
+    if (details.provider_error_code) {
+        notes.push(`provider code ${details.provider_error_code}`);
+    }
+
+    if (details.http_status) {
+        notes.push(`HTTP ${details.http_status}`);
+    }
+
+    return notes.join(' · ');
+}
+
+function feedReferenceBadges(item) {
+    const details = item?.details || {};
+    const badgesList = [];
+
+    if (details.message_id) {
+        badgesList.push(badge(`mensagem ${shortReference(details.message_id)}`, 'stone'));
+    }
+
+    if (details.outbox_event_id) {
+        badgesList.push(badge(`outbox ${shortReference(details.outbox_event_id)}`, 'stone'));
+    }
+
+    if (details.aggregate_id) {
+        badgesList.push(badge(`aggregate ${shortReference(details.aggregate_id)}`, 'stone'));
+    }
+
+    if (details.request_id) {
+        badgesList.push(badge(`request ${shortReference(details.request_id)}`, 'stone'));
+    }
+
+    if (details.correlation_id) {
+        badgesList.push(badge(`corr ${shortReference(details.correlation_id)}`, 'stone'));
     }
 
     if (item.direction) {
-        parts.push(`direcao ${item.direction}`);
+        badgesList.push(badge(`direcao ${item.direction}`, 'stone'));
     }
 
-    if (item.error_code) {
-        parts.push(`codigo ${item.error_code}`);
+    if (details.endpoint) {
+        badgesList.push(badge(`endpoint ${shortText(details.endpoint, 42)}`, 'stone'));
     }
 
-    return parts.length > 0 ? parts.join(' · ') : 'Sem contexto adicional.';
+    return badgesList.length > 0 ? badgesList.join('') : '<span class="text-xs text-slate-500">Sem referencia adicional.</span>';
+}
+
+function feedSecondaryLine(item) {
+    const details = item?.details || {};
+    const notes = [];
+
+    if (details.reason) {
+        notes.push(`motivo ${details.reason}`);
+    }
+
+    if (details.http_status) {
+        notes.push(`HTTP ${details.http_status}`);
+    }
+
+    if (details.provider_error_code) {
+        notes.push(`provider code ${details.provider_error_code}`);
+    }
+
+    if (Array.isArray(details.result)) {
+        notes.push('resultado sanitizado disponivel');
+    }
+
+    if (details.result && typeof details.result === 'object') {
+        if (Object.prototype.hasOwnProperty.call(details.result, 'healthy')) {
+            notes.push(details.result.healthy ? 'healthcheck healthy' : 'healthcheck unhealthy');
+        }
+
+        if (details.result.latency_ms) {
+            notes.push(`${details.result.latency_ms}ms`);
+        }
+    }
+
+    return notes.join(' · ');
+}
+
+function feedCardBorder(item) {
+    switch (item?.severity) {
+        case 'high':
+            return 'border-rose-200';
+        case 'medium':
+            return 'border-amber-200';
+        default:
+            return 'border-stone-200';
+    }
+}
+
+function shortReference(value) {
+    const stringValue = String(value || '');
+
+    if (stringValue.length <= 16) {
+        return stringValue;
+    }
+
+    return `${stringValue.slice(0, 8)}…${stringValue.slice(-6)}`;
+}
+
+function shortText(value, maxLength) {
+    const stringValue = String(value || '');
+
+    if (stringValue.length <= maxLength) {
+        return stringValue;
+    }
+
+    return `${stringValue.slice(0, maxLength - 1)}…`;
 }
 
 function badge(label, tone) {
