@@ -52,6 +52,10 @@ class ProvisionTenantActionTest extends TestCase
         try {
             $this->assertTrue(Schema::connection('tenant')->hasTable('clients'));
             $this->assertTrue(Schema::connection('tenant')->hasTable('messages'));
+            $this->assertTrue(Schema::connection('tenant')->hasTable('event_logs'));
+            $this->assertTrue(Schema::connection('tenant')->hasTable('outbox_events'));
+            $this->assertTrue(Schema::connection('tenant')->hasTable('integration_attempts'));
+            $this->assertTrue(Schema::connection('tenant')->hasTable('whatsapp_provider_configs'));
         } finally {
             app(TenantDatabaseManager::class)->disconnect();
         }

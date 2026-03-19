@@ -2,6 +2,11 @@
 
 namespace App\Providers;
 
+use App\Application\Listeners\Observability\RecordAppointmentCreatedDomainEvent;
+use App\Application\Listeners\Observability\RecordOrderClosedDomainEvent;
+use App\Domain\Appointment\Events\AppointmentCreated;
+use App\Domain\Order\Events\OrderClosed;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -19,6 +24,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Event::listen(AppointmentCreated::class, RecordAppointmentCreatedDomainEvent::class);
+        Event::listen(OrderClosed::class, RecordOrderClosedDomainEvent::class);
     }
 }

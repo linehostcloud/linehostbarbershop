@@ -319,6 +319,42 @@ Relacionamentos:
 - belongsTo `tenant`
 - belongsTo `user`
 
+#### Tabela: `boundary_rejection_audits`
+
+Canal dedicado para rejeicoes no boundary da mensageria WhatsApp. Essa tabela vive no `landlord` porque parte das rejeicoes ocorre antes de qualquer conexao tenant estar disponivel.
+
+| Campo | Tipo | Observacoes |
+| --- | --- | --- |
+| id | ulid | PK |
+| tenant_id | ulid nullable | FK para `tenants.id` quando resolvido |
+| tenant_slug | string(80) nullable | Slug informado ou inferido |
+| actor_user_id | ulid nullable | FK para `users.id` quando autenticado |
+| actor_email | string(190) nullable | Snapshot do ator |
+| direction | string(20) | `outbound` ou `webhook` |
+| endpoint | string(160) | URI normalizada da rota |
+| route_name | string(160) nullable | Nome interno da rota |
+| method | string(10) | Metodo HTTP |
+| host | string(190) | Host recebido |
+| source_ip | string(45) nullable | Origem da requisicao |
+| provider | string(50) nullable | Provider informado |
+| slot | string(20) nullable | Slot informado ou resolvido |
+| code | string(80) | Codigo normalizado da rejeicao |
+| message | string(255) | Resumo tecnico da causa |
+| http_status | unsignedSmallInteger nullable | Status retornado no boundary |
+| request_id | string(120) nullable | Correlacao externa |
+| correlation_id | uuid | Correlacao interna |
+| payload_json | json nullable | Payload sanitizado |
+| headers_json | json nullable | Headers sanitizados |
+| context_json | json nullable | Contexto auxiliar e hash do corpo |
+| occurred_at | timestamp | Momento da rejeicao |
+| created_at | timestamp | Auditoria |
+| updated_at | timestamp | Auditoria |
+
+Relacionamentos:
+
+- belongsTo `tenant`
+- belongsTo `user`
+
 #### Tabela: `tenant_user_invitations`
 
 | Campo | Tipo | Observacoes |
@@ -734,8 +770,9 @@ Estas tabelas nao estavam na lista minima solicitada, mas sao recomendadas para 
 - `cash_register_sessions`: abertura, fechamento e conciliacao de caixa.
 - `automation_runs`: rastreamento idempotente das execucoes.
 - `campaign_recipients`: auditoria de publico e status por cliente.
-- `outbox_messages`: padrao outbox para publicacao confiavel de eventos.
-- `inbox_webhooks`: idempotencia e auditoria de webhooks externos.
+- `event_logs`: trilha imutavel de eventos de dominio, API e webhook.
+- `outbox_events`: fila persistida por tenant para processamento assincrono e retry.
+- `integration_attempts`: historico de tentativas outbound e inbound por provedor.
 - `message_templates`: catalogo versionado de templates por canal.
 - `audit_logs`: trilha de auditoria de operacoes sensiveis.
 
@@ -785,6 +822,10 @@ Rotas previstas:
 - `/api/v1/campaigns`
 - `/api/v1/automations`
 - `/api/v1/messages`
+- `/api/v1/event-logs`
+- `/api/v1/outbox-events`
+- `/api/v1/integration-attempts`
+- `/api/v1/boundary-rejection-audits`
 - `/webhooks/whatsapp/{provider}`
 - `/webhooks/payments/{provider}`
 
@@ -817,6 +858,13 @@ Ordem recomendada:
 2. Ao iniciar, o job reabre o contexto no landlord.
 3. Reconfigura a conexao do tenant.
 4. Executa a logica dentro desse contexto.
+
+Implementacao atual:
+
+- o comando `tenancy:process-outbox` percorre tenants ativos ou explicitamente informados;
+- para cada tenant, a conexao `tenant` e reaberta dinamicamente antes do processamento;
+- o retry de integracoes fica persistido no proprio banco do tenant, sem depender de estado em memoria;
+- o mesmo mecanismo vale para auditoria de eventos de dominio e webhooks de WhatsApp.
 
 #### Regras nao negociaveis
 
@@ -987,9 +1035,10 @@ Todo evento persistido ou enfileirado deve conter:
 Padrao recomendado:
 
 - transacao do dominio grava estado principal;
-- mesma transacao grava um registro em `outbox_messages`;
-- job despachante publica para listeners assincronos;
-- processamento idempotente por `event_id`.
+- mesma transacao grava `event_logs` e `outbox_events`;
+- um processor tenant-aware busca eventos com `status in (pending, retry_scheduled)`;
+- efeitos de integracao registram `integration_attempts`;
+- processamento idempotente por `outbox_event_id` e `external_message_id` quando aplicavel.
 
 ### 5.2 Regras de automacao
 
@@ -1039,9 +1088,9 @@ As regras devem suportar filtros versionados em JSON, por exemplo:
 Fluxo padrao:
 
 1. Evento ocorre.
-2. Listener de elegibilidade identifica automacoes candidatas.
-3. Regra validada gera `automation_run` pendente.
-4. Job em fila executa a acao.
+2. Listener grava `event_logs` e `outbox_events` no tenant.
+3. Processor do outbox avalia o tipo do evento e identifica automacoes candidatas.
+4. Integracoes e acoes de canal executam com retry controlado pelo banco.
 5. Resultado atualiza auditoria, mensagem, campanha e metricas.
 
 Filas recomendadas:
@@ -1050,46 +1099,78 @@ Filas recomendadas:
 - envio de mensagem: `notifications`
 - callbacks de status: `integrations`
 
+Implementacao atual:
+
+- eventos `appointment.created` e `order.closed` ja entram no outbox automaticamente;
+- mensagens outbound de WhatsApp geram `whatsapp.message.dispatch.requested`;
+- webhooks inbound geram `whatsapp.webhook.process.requested`;
+- o comando `tenancy:process-outbox` executa esses handlers hoje de forma deterministica, idempotente e observavel.
+
 Falhas:
 
-- erro temporario: retry com backoff exponencial;
-- erro permanente: marca como `failed`, grava motivo e alerta operacao;
+- erro temporario: retry apenas quando o erro normalizado for retryable;
+- erro permanente: marca como `failed`, grava motivo e interrompe reprocessamento;
 - webhook duplicado: ignorar por idempotencia.
+- evento preso em `processing`: aplicar reclaim seguro apenas quando houver evidencias internas suficientes para reabrir ou reconciliar sem risco de segundo efeito colateral.
 
 ## 6. WHATSAPP INTEGRATION
 
 ### 6.1 Arquitetura de integracao
 
-O sistema deve tratar WhatsApp como um modulo de infraestrutura com adaptadores por provedor.
+O sistema trata WhatsApp como um modulo de infraestrutura provider-agnostic. O dominio nao conhece payload, endpoint, autenticacao nem taxonomia proprietaria de nenhum provider.
 
 Camadas:
 
-- `WhatsappProvider` interface
-- `ZApiProvider` adapter
-- `Dialog360Provider` adapter
-- `MetaCloudProvider` futuro
-- normalizador de payload inbound/outbound
-- controller de webhooks
-- servico de conversa e handoff
+- `App\Domain\Communication\Contracts\WhatsappProvider`
+- DTOs internos:
+  - `OutboundWhatsappMessageData`
+  - `ProviderDispatchResult`
+  - `InboundWhatsappMessageData`
+  - `ProviderStatusUpdateData`
+  - `ProviderErrorData`
+  - `NormalizedWhatsappWebhookData`
+- `TenantWhatsappProviderResolver` para resolver provider e credenciais por tenant
+- `WhatsappProviderConfig` como configuracao persistida por tenant
+- adapters concretos:
+  - `WhatsappCloudProvider`
+  - `EvolutionApiWhatsappProvider`
+  - `GoWaWhatsappProvider`
+- `FakeWhatsappProvider` e `fake-transient-failure` apenas para local/testes
+- `WhatsappPayloadSanitizer` para mascaramento de credenciais e payloads sensiveis
+- `RecordBoundaryRejectionAuditAction` como trilha persistente de rejeicoes no boundary, separada de `event_logs`, `outbox_events` e `integration_attempts`
+- `ReceiveWhatsappWebhookAction`, `DispatchWhatsappMessageAction` e `ProcessWhatsappWebhookAction` como unicos pontos de orquestracao da borda
+
+Status implementado:
+
+- `fake`: envio com sucesso imediato;
+- `fake-transient-failure`: primeira tentativa falha e a seguinte tem sucesso, para validar retry;
+- `whatsapp_cloud`: provider prioritario, com envio texto/template/midia, normalizacao de webhook, status e assinatura;
+- `evolution_api`: provider self-hosted principal, com envio de texto, normalizacao de webhook e healthcheck; `instance_management` e `qr_bootstrap` estao apenas preparados, nao operacionais;
+- `gowa`: provider alternativo, com envio de texto via Basic Auth, normalizacao de webhook e healthcheck.
 
 ### 6.2 Estrategia de provedores
 
-#### Z-API
+#### WhatsApp Cloud Oficial
 
-- Rapido para bootstrap operacional.
-- Menor barreira inicial.
-- Maior risco de acoplamento a payload proprietario.
+- provider de referencia arquitetural;
+- prioridade para tenants que precisam de previsibilidade, compliance, templates oficiais e trilha consistente de status.
 
-#### 360Dialog
+#### Evolution API
 
-- Melhor caminho para operacao escalavel com API oficial Meta.
-- Melhor para templates e compliance.
-- Recomendado para tenants com volume consistente e necessidade de previsibilidade.
+- provider self-hosted principal;
+- ideal para cenarios com maior controle operacional, bootstrap de instancia e necessidade de autonomia sobre infraestrutura.
+
+#### GoWA
+
+- provider alternativo e controlado;
+- util para operacoes que preferem stack self-hosted com contrato HTTP simples;
+- recursos alem de texto dependem de confirmacao adicional do contrato oficial do provider.
 
 Diretriz:
 
 - O dominio nunca fala direto com payload do provedor.
 - Todo provedor deve ser adaptado para um contrato interno unico.
+- `z-api` e `360dialog` nao fazem mais parte da camada ativa.
 
 ### 6.3 Webhooks
 
@@ -1103,12 +1184,57 @@ Eventos tratados:
 
 Fluxo de webhook:
 
-1. Validar assinatura e origem.
-2. Persistir payload bruto em `inbox_webhooks`.
-3. Normalizar o evento.
-4. Identificar tenant pelo numero/conta do canal.
-5. Enfileirar processamento.
-6. Atualizar `messages` e disparar evento interno.
+1. Resolver tenant por dominio ou `X-Tenant-Slug`.
+2. Resolver e validar o provider esperado para o tenant.
+3. Validar assinatura/secret quando o provider suportar.
+4. Gerar `idempotency_key` por payload bruto e bloquear replays.
+5. Persistir `event_logs` e `outbox_events` antes do processamento de dominio.
+6. Normalizar o payload externo para DTOs internos no adapter do provider.
+7. Atualizar `messages` sem regressao de status.
+8. Registrar tentativas e resultados em `integration_attempts`.
+
+Rejeicoes antes do pipeline:
+
+- provider invalido, tenant nao resolvido, configuracao ausente ou invalida, capability nao suportada, capability nao habilitada, assinatura invalida e falhas de autenticacao/autorizacao nao criam `message`, `outbox_event` nem `integration_attempt`;
+- esses casos geram registro em `boundary_rejection_audits` no `landlord`;
+- payload e headers persistidos passam por sanitizacao obrigatoria para nao armazenar token, secret, password, authorization, api_key nem assinatura bruta.
+
+Maquina de estados formal:
+
+- outbound valido: `queued -> dispatched -> sent -> delivered -> read`;
+- outbound tambem aceita salto monotono para frente quando o provider nao reporta cada etapa intermediaria;
+- `failed` outbound so se torna estado persistido quando o erro e terminal; falha transitoria preserva o estado anterior e deixa o retry no outbox;
+- inbound valido: `inbound_received -> inbound_processed`;
+- inbound e outbound vivem em espacos de estado separados;
+- webhook duplicado gera decisao `duplicate_webhook` e nao altera o recurso;
+- status desconhecido do provider nao e convertido em `failed`; ele entra como status ignorado e fica auditavel;
+- status regressivo gera decisao `regressive_status` e nao rebaixa a mensagem.
+
+Status internos padronizados:
+
+- `queued`
+- `dispatched`
+- `sent`
+- `delivered`
+- `read`
+- `failed`
+- `inbound_received`
+- `inbound_processed`
+
+Codigos internos de erro:
+
+- `authentication_error`
+- `authorization_error`
+- `validation_error`
+- `rate_limit`
+- `transient_network_error`
+- `timeout_error`
+- `provider_unavailable`
+- `unsupported_feature`
+- `permanent_provider_error`
+- `webhook_signature_invalid`
+- `duplicate_webhook`
+- `unknown_error`
 
 ### 6.4 Envio e recebimento de mensagens
 
@@ -1117,6 +1243,7 @@ Fluxo de webhook:
 - Template para mensagens ativas de reengajamento e lembrete.
 - Texto livre para atendimento em janela permitida.
 - Mensagens interativas quando o provedor suportar.
+- Nenhum caller fora da borda de integracao monta payload HTTP direto.
 
 #### Recebimento
 
@@ -1125,7 +1252,75 @@ Fluxo de webhook:
 - Classificacao de intencao.
 - Encaminhamento para fluxo deterministico ou humano.
 
-### 6.5 Agente automatico de atendimento
+### 6.5 Operacao por tenant
+
+Comandos operacionais:
+
+- `php artisan tenancy:configure-whatsapp-provider <tenant> <provider> --slot=primary ...`
+- `php artisan tenancy:whatsapp-healthcheck <tenant> --slot=primary`
+- `php artisan tenancy:process-outbox --tenant=<slug> --limit=50`
+- `php artisan tenancy:reclaim-stale-outbox --tenant=<slug> --limit=50`
+
+Campos persistidos por tenant em `whatsapp_provider_configs`:
+
+- `provider`
+- `fallback_provider`
+- `base_url`
+- `api_version`
+- `api_key`
+- `access_token`
+- `phone_number_id`
+- `business_account_id`
+- `instance_name`
+- `webhook_secret`
+- `verify_token`
+- `timeout_seconds`
+- `retry_profile_json`
+- `enabled_capabilities_json`
+- `settings_json`
+
+Regras:
+
+- existe provider primario e provider secundario estrutural;
+- fallback automatico ainda nao esta ativo;
+- credenciais sensiveis ficam cifradas;
+- `integration_attempts` recebe payload sanitizado, sem token, secret ou password em claro;
+- `boundary_rejection_audits` registra rejeicoes pre-pipeline por tenant, endpoint, provider, slot, request e codigo normalizado;
+- `GET /api/v1/boundary-rejection-audits` expoe essa trilha de forma tenant-scoped para operacao;
+- `api_key`, `access_token`, `webhook_secret`, `verify_token` e `settings_json` sao cifrados em repouso;
+- `base_url` passa por validacao de seguranca e bloqueia loopback, hosts internos e credenciais embutidas por padrao;
+- `whatsapp_cloud` exige `https://`;
+- configuracao inconsistente falha antes de entrar no pipeline de enqueue.
+
+### 6.6 Reclaim seguro do outbox
+
+Politica:
+
+- stale = `status=processing` com `reserved_at` mais antigo que o threshold configurado;
+- o threshold efetivo nunca fica abaixo de 121 segundos, para nao competir com o timeout maximo permitido de provider;
+- reclaim automatico/manual so existe se `OUTBOX_RECLAIM_ENABLED=1`;
+- `tenancy:process-outbox` pode executar reclaim antes do lote normal quando `OUTBOX_RECLAIM_AUTO_RUN_ON_PROCESS=1`.
+
+Decisoes possiveis para um item stale:
+
+- `reclaimed`: reabre em `retry_scheduled`, incrementa `reclaim_count`, define `last_reclaimed_at`, `last_reclaim_reason` e aplica backoff proprio;
+- `reconciled`: marca `processed` quando ja existe evidencia interna de dispatch concluido;
+- `failed`: encerra terminalmente quando houve falha terminal persistida, limite maximo de reclaim excedido ou dispatch incerto em voo.
+
+Regras de seguranca:
+
+- dispatch com `integration_attempt.status=processing` nao e reaberto automaticamente, porque ja pode ter gerado efeito externo nao confirmado;
+- dispatch com `integration_attempt.status=succeeded` ou `message.external_message_id` + status avancado e reconciliado como concluido;
+- dispatch com `integration_attempt.status=retry_scheduled` reaproveita a evidencia e volta para retry sem duplicar envio;
+- dispatch com `integration_attempt.status=failed` e `retryable=false` e fechado como falha terminal;
+- eventos nao irreversiveis, como processamento de webhook e auditoria, podem ser reclaimados com seguranca quando stale.
+
+Observabilidade:
+
+- todo reclaim gera `event_logs` especificos: `outbox.event.reclaimed`, `outbox.event.reconciled` ou `outbox.event.reclaim.blocked`;
+- o payload registra `outbox_event_id`, idade do travamento, `reclaim_count` anterior e posterior, motivo e proximo `available_at` quando houver;
+- o `outbox_event` passa a expor `reclaim_count`, `last_reclaimed_at` e `last_reclaim_reason`.
+### 6.7 Agente automatico de atendimento
 
 O agente deve operar em modo assistido por regras, com IA opcional para classificacao e redacao. Acoes que alteram estado precisam de confirmacao explicita.
 

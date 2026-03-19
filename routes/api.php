@@ -2,16 +2,22 @@
 
 use App\Http\Controllers\Api\AppointmentController;
 use App\Http\Controllers\Api\AcceptTenantInvitationController;
+use App\Http\Controllers\Api\AdminWhatsappProviderController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\LogoutController;
 use App\Http\Controllers\Api\Auth\MeController;
+use App\Http\Controllers\Api\BoundaryRejectionAuditController;
 use App\Http\Controllers\Api\CashRegisterMovementController;
 use App\Http\Controllers\Api\CashRegisterSessionController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\CloseCashRegisterSessionController;
 use App\Http\Controllers\Api\CloseOrderController;
 use App\Http\Controllers\Api\FinanceSummaryController;
+use App\Http\Controllers\Api\EventLogController;
+use App\Http\Controllers\Api\IntegrationAttemptController;
+use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\OrderController;
+use App\Http\Controllers\Api\OutboxEventController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\ProfessionalController;
 use App\Http\Controllers\Api\ProfessionalCommissionPayoutController;
@@ -24,6 +30,7 @@ use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\InviteTenantUserController;
 use App\Http\Controllers\Api\ResetTenantUserPasswordController;
 use App\Http\Controllers\Api\UpdateTenantMembershipController;
+use App\Http\Controllers\Api\WhatsappOperationsController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -120,6 +127,50 @@ Route::prefix('v1')->group(function (): void {
 
             Route::get('/finance/summary', FinanceSummaryController::class)
                 ->middleware('tenant.ability:finance.read');
+
+            Route::get('/messages', [MessageController::class, 'index'])
+                ->middleware('tenant.ability:messages.read');
+            Route::post('/messages/whatsapp', [MessageController::class, 'storeWhatsapp'])
+                ->middleware('tenant.ability:messages.write');
+            Route::get('/messages/{message}', [MessageController::class, 'show'])
+                ->middleware('tenant.ability:messages.read');
+
+            Route::get('/admin/whatsapp-providers', [AdminWhatsappProviderController::class, 'index'])
+                ->middleware('tenant.ability:whatsapp.providers.read');
+            Route::get('/admin/whatsapp-providers/{slot}', [AdminWhatsappProviderController::class, 'show'])
+                ->middleware('tenant.ability:whatsapp.providers.read');
+            Route::post('/admin/whatsapp-providers', [AdminWhatsappProviderController::class, 'store'])
+                ->middleware('tenant.ability:whatsapp.providers.write');
+            Route::patch('/admin/whatsapp-providers/{slot}', [AdminWhatsappProviderController::class, 'update'])
+                ->middleware('tenant.ability:whatsapp.providers.write');
+            Route::post('/admin/whatsapp-providers/{slot}/activate', [AdminWhatsappProviderController::class, 'activate'])
+                ->middleware('tenant.ability:whatsapp.providers.write');
+            Route::post('/admin/whatsapp-providers/{slot}/deactivate', [AdminWhatsappProviderController::class, 'deactivate'])
+                ->middleware('tenant.ability:whatsapp.providers.write');
+            Route::post('/admin/whatsapp-providers/{slot}/healthcheck', [AdminWhatsappProviderController::class, 'healthcheck'])
+                ->middleware('tenant.ability:whatsapp.providers.healthcheck');
+
+            Route::get('/operations/whatsapp/summary', [WhatsappOperationsController::class, 'summary'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+            Route::get('/operations/whatsapp/providers', [WhatsappOperationsController::class, 'providers'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+            Route::get('/operations/whatsapp/queue', [WhatsappOperationsController::class, 'queue'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+            Route::get('/operations/whatsapp/boundary-rejections/summary', [WhatsappOperationsController::class, 'boundarySummary'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+            Route::get('/operations/whatsapp/boundary-rejections', [WhatsappOperationsController::class, 'boundaryRejections'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+            Route::get('/operations/whatsapp/feed', [WhatsappOperationsController::class, 'feed'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+
+            Route::get('/event-logs', EventLogController::class)
+                ->middleware('tenant.ability:observability.read');
+            Route::get('/outbox-events', OutboxEventController::class)
+                ->middleware('tenant.ability:observability.read');
+            Route::get('/integration-attempts', IntegrationAttemptController::class)
+                ->middleware('tenant.ability:observability.read');
+            Route::get('/boundary-rejection-audits', BoundaryRejectionAuditController::class)
+                ->middleware('tenant.ability:observability.read');
         });
     });
 });

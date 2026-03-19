@@ -46,6 +46,9 @@ Passos:
    - `MAIL_HOST=mailpit`
    - `VIRTUAL_HOST=sistemabarbearia.local`
    - `CENTRAL_DOMAINS=sistemabarbearia.local,localhost,127.0.0.1`
+   - `WHATSAPP_DEFAULT_PROVIDER=fake`
+   - `OUTBOX_DEFAULT_MAX_ATTEMPTS=5`
+   - `OUTBOX_DEFAULT_RETRY_BACKOFF_SECONDS=60`
 
 3. Instale a base do Laravel:
 
@@ -130,6 +133,13 @@ Endpoints disponiveis:
 - `GET /professionals/{id}/commission-summary`
 - `POST /professionals/{id}/commission-payouts`
 - `GET /finance/summary`
+- `GET /messages`
+- `POST /messages/whatsapp`
+- `GET /messages/{id}`
+- `GET /event-logs`
+- `GET /outbox-events`
+- `GET /integration-attempts`
+- `GET /boundary-rejection-audits`
 
 Fluxo financeiro operacional:
 
@@ -152,6 +162,126 @@ Resolucao de tenant:
 - por dominio do tenant
 - ou pelo header `X-Tenant-Slug` quando estiver em dominio central
 - o bearer token emitido em `POST /auth/login` fica vinculado ao `tenant_id` e nao funciona em outro tenant
+
+## Observabilidade e WhatsApp
+
+Fluxo implementado:
+
+- eventos de dominio relevantes, como `appointment.created` e `order.closed`, viram registros em `event_logs` e `outbox_events` dentro do banco do tenant
+- envio outbound de WhatsApp cria `messages`, um `event_log` de auditoria e um `outbox_event` com processamento assincrono
+- webhooks inbound sao validados, deduplicados por hash de payload e processados via outbox
+- tentativas de integracao ficam rastreadas em `integration_attempts` com `provider_message_id`, `provider_status`, `provider_request_id`, `http_status`, `latency_ms`, `normalized_status` e `normalized_error_code`
+- configuracao invalida do provider falha antes do enqueue, responde `422 validation_error` e nao cria `message`, `outbox_event` nem `integration_attempt`
+- rejeicoes no boundary, antes de `message`, `outbox_event` e `integration_attempt`, ficam persistidas em `boundary_rejection_audits` no banco `landlord`, com payload e headers sanitizados
+- `outbox_events` presos em `processing` podem ser recuperados com reclaim seguro baseado em `reserved_at`, trilha operacional e evidencias internas de dispatch
+
+Comando operacional:
+
+```bash
+docker compose run --rm app php artisan tenancy:process-outbox --tenant=barbearia-demo --limit=50
+docker compose run --rm app php artisan tenancy:reclaim-stale-outbox --tenant=barbearia-demo --limit=50
+```
+
+Configurar provider por tenant:
+
+```bash
+docker compose run --rm app php artisan tenancy:configure-whatsapp-provider barbearia-demo whatsapp_cloud \
+  --slot=primary \
+  --base-url=https://graph.facebook.com \
+  --api-version=v22.0 \
+  --access-token=SEU_TOKEN \
+  --phone-number-id=SEU_PHONE_NUMBER_ID \
+  --capability=text \
+  --capability=template \
+  --capability=media \
+  --capability=inbound_webhook \
+  --capability=delivery_status \
+  --capability=read_receipt \
+  --retry-max=5 \
+  --retry-backoff=60
+```
+
+Health check do provider ativo:
+
+```bash
+docker compose run --rm app php artisan tenancy:whatsapp-healthcheck barbearia-demo --slot=primary
+```
+
+Esse comando:
+
+- conecta no banco de cada tenant informado
+- busca eventos com `status in (pending, retry_scheduled)` e `available_at <= now()`
+- processa envio de WhatsApp, webhook e eventos de auditoria
+- reaplica retry apenas para falhas classificadas como retryable
+- preserva idempotencia de webhook e evita claim duplo no outbox
+- quando `OUTBOX_RECLAIM_AUTO_RUN_ON_PROCESS=1`, faz reclaim previo de itens stale em `processing`
+
+Politica de reclaim stale:
+
+- so considera stale eventos com `status=processing`, `reserved_at` antigo e acima do threshold configurado
+- se o dispatch ja tem evidencia de sucesso (`message.external_message_id`/status avancado ou `integration_attempt` sucedido), o item e reconciliado como `processed`
+- se o dispatch tem evidencia de falha retryable ja persistida, o item volta para `retry_scheduled`
+- se o dispatch tem tentativa `processing` sem evidencia final, o item nao e reaberto automaticamente; ele vai para `failed` com motivo de revisao manual para evitar segundo envio
+- se o limite de reclaim for excedido, o item e encerrado em `failed`
+- toda decisao gera `event_log` operacional: `outbox.event.reclaimed`, `outbox.event.reconciled` ou `outbox.event.reclaim.blocked`
+
+Configuracao de reclaim:
+
+- `OUTBOX_RECLAIM_ENABLED`
+- `OUTBOX_RECLAIM_AUTO_RUN_ON_PROCESS`
+- `OUTBOX_RECLAIM_STALE_AFTER_SECONDS`
+- `OUTBOX_RECLAIM_MAX_ATTEMPTS`
+- `OUTBOX_RECLAIM_BACKOFF_SECONDS`
+
+Providers disponiveis hoje:
+
+- `fake`: sucesso imediato, indicado para desenvolvimento local
+- `fake-transient-failure`: falha na primeira tentativa e sucesso na seguinte, indicado para validar retry
+- `whatsapp_cloud`: provider prioritario e referencia arquitetural
+- `evolution_api`: provider self-hosted principal para flexibilidade operacional
+- `gowa`: provider alternativo com autenticacao Basic Auth e webhook normalizado
+
+Capacidades atuais:
+
+- `fake`: implementadas `text`, `template`, `media`, `inbound_webhook`, `delivery_status`, `read_receipt`, `healthcheck`
+- `fake-transient-failure`: implementadas `text`, `template`, `media`, `inbound_webhook`, `delivery_status`, `read_receipt`, `healthcheck`
+- `whatsapp_cloud`: `text`, `template`, `media`, `inbound_webhook`, `delivery_status`, `read_receipt`, `healthcheck`, `official_templates`
+- `evolution_api`: implementadas `text`, `inbound_webhook`, `delivery_status`, `read_receipt`, `healthcheck`; preparadas mas nao operacionais `instance_management`, `qr_bootstrap`
+- `gowa`: `text`, `inbound_webhook`, `delivery_status`, `read_receipt`, `healthcheck`
+
+Limitacoes atuais:
+
+- fallback entre provider primario e secundario ainda nao esta ativo; a estrutura existe apenas para evolucao futura
+- `gowa` esta pronto para envio de texto e normalizacao de webhook, mas recursos alem de texto dependem de contrato oficial adicional do provider
+- capability nao implementada ou nao habilitada pelo tenant falha no boundary com `unsupported_feature`, sem criar artefatos do pipeline operacional, e deixa trilha em `boundary_rejection_audits`
+- o projeto nao mantem `z-api` nem `360dialog` na camada ativa; referencias legadas persistidas em historico nao sao reativadas automaticamente
+
+Webhook WhatsApp:
+
+- rota: `POST /webhooks/whatsapp/{provider}`
+- exige resolucao de tenant por dominio ou `X-Tenant-Slug`
+- rejeicoes como `provider_invalid`, `tenant_unresolved`, `provider_config_invalid`, `capability_not_supported`, `capability_not_enabled` e `webhook_signature_invalid` ficam consultaveis em `GET /api/v1/boundary-rejection-audits`
+- valida assinatura ou secret quando o provider suportar
+- persiste `event_logs` e `outbox_events` antes de qualquer processamento de dominio
+- bloqueia duplicidade por `event_logs.idempotency_key`
+- atualiza `messages.status` usando linguagem interna unica: `queued`, `dispatched`, `sent`, `delivered`, `read`, `failed`, `inbound_received`, `inbound_processed`
+- status desconhecido do provider e ignorado com trilha operacional; nao e convertido artificialmente em `failed`
+- webhook regressivo ou duplicado nao rebaixa `messages.status`
+
+Maquina de estados aplicada centralmente:
+
+- outbound permitido: `queued -> dispatched -> sent -> delivered -> read`
+- outbound tambem aceita salto monotono para frente quando o provider nao reporta todos os degraus intermediarios
+- `failed` outbound terminal so se o erro for permanente; falha transitoria preserva estado e agenda retry
+- inbound permitido: `inbound_received -> inbound_processed`
+- espacos de estado inbound e outbound sao separados; um webhook nao pode cruzar essa fronteira
+
+Seguranca da configuracao por tenant:
+
+- `base_url` de provider real e validada e bloqueia `localhost`, loopback, hosts internos e URL com credenciais embutidas, salvo opt-in explicito de `WHATSAPP_ALLOW_PRIVATE_NETWORK_TARGETS=1`
+- `whatsapp_cloud` exige `https://`
+- campos sensiveis cifrados em repouso: `api_key`, `access_token`, `webhook_secret`, `verify_token`, `settings_json`
+- payloads e headers sensiveis sao mascarados em logs, `event_logs` e `integration_attempts`
 
 ## Estrutura basica
 
@@ -180,4 +310,7 @@ Resolucao de tenant:
 - Comissoes de profissionais sao provisionadas automaticamente no fechamento da comanda com base no item, servico e profissional.
 - O saldo esperado da sessao de caixa e sincronizado automaticamente a cada venda em dinheiro, movimentacao manual e repasse em dinheiro.
 - O ledger em `transactions` agora cobre receita, comissao provisionada, repasse de comissao, suprimento, sangria e ajustes operacionais.
+- Observabilidade operacional tenant agora usa `event_logs`, `outbox_events` e `integration_attempts`.
+- O retry de integracoes nao depende de estado em memoria; ele fica persistido no banco do tenant e e reprocessado por `tenancy:process-outbox`.
+- O canal WhatsApp agora usa contrato interno unico por provider, DTOs tipados, resolver tenant-first, normalizacao obrigatoria de status/erro e sanitizacao de payloads sensiveis.
 - Testes de financeiro continuam isolados em SQLite e nao dependem do MariaDB compartilhado.

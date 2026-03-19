@@ -116,6 +116,7 @@ return [
 
     'access_tokens' => [
         'ttl_minutes' => env('AUTH_ACCESS_TOKEN_TTL_MINUTES', 10080),
+        'panel_cookie' => env('AUTH_ACCESS_TOKEN_PANEL_COOKIE', 'tenant_panel_access_token'),
     ],
 
 ];

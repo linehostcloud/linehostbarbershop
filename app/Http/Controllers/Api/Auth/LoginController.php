@@ -2,89 +2,55 @@
 
 namespace App\Http\Controllers\Api\Auth;
 
-use App\Application\Actions\Auth\IssueTenantAccessTokenAction;
-use App\Domain\Tenant\Models\TenantMembership;
+use App\Application\Actions\Auth\AuthenticateTenantCredentialsAction;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\LoginRequest;
-use App\Infrastructure\Auth\TenantPermissionMatrix;
 use App\Infrastructure\Tenancy\TenantContext;
-use App\Models\User;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\ValidationException;
 
 class LoginController extends Controller
 {
     public function __invoke(
         LoginRequest $request,
         TenantContext $tenantContext,
-        IssueTenantAccessTokenAction $issueTenantAccessToken,
-        TenantPermissionMatrix $tenantPermissionMatrix,
+        AuthenticateTenantCredentialsAction $authenticateTenantCredentials,
     ): JsonResponse {
         $tenant = $tenantContext->current();
         $credentials = $request->validated();
-
-        $user = User::query()
-            ->where('email', strtolower(trim($credentials['email'])))
-            ->first();
-
-        if ($user === null || ! Hash::check($credentials['password'], $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => 'As credenciais informadas sao invalidas.',
-            ]);
-        }
-
-        if (! $user->isActive()) {
-            return response()->json([
-                'message' => 'O usuario informado esta bloqueado ou inativo.',
-            ], 403);
-        }
-
-        $membership = $user->memberships()
-            ->where('tenant_id', $tenant?->id)
-            ->first();
-
-        if (! $membership instanceof TenantMembership || ! $membership->isActive()) {
-            return response()->json([
-                'message' => 'O usuario informado nao possui acesso ativo a este tenant.',
-            ], 403);
-        }
-
-        $issuedToken = $issueTenantAccessToken->execute($user, $membership->tenant()->firstOrFail(), [
-            'name' => $credentials['device_name'] ?? 'api',
-            'abilities' => ['*'],
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-        ]);
-
-        $user->forceFill([
-            'last_login_at' => now(),
-        ])->save();
+        abort_if($tenant === null, 404, 'Tenant ativo nao encontrado para autenticacao.');
+        $result = $authenticateTenantCredentials->execute(
+            tenant: $tenant,
+            email: (string) $credentials['email'],
+            password: (string) $credentials['password'],
+            deviceName: $credentials['device_name'] ?? 'api',
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
 
         return response()->json([
             'data' => [
                 'token_type' => 'Bearer',
-                'access_token' => $issuedToken->plainTextToken,
-                'expires_at' => $issuedToken->accessToken->expires_at?->toIso8601String(),
+                'access_token' => $result->plainTextToken,
+                'expires_at' => $result->accessToken->expires_at?->toIso8601String(),
                 'tenant' => [
-                    'id' => $membership->tenant->id,
-                    'slug' => $membership->tenant->slug,
-                    'trade_name' => $membership->tenant->trade_name,
+                    'id' => $result->membership->tenant->id,
+                    'slug' => $result->membership->tenant->slug,
+                    'trade_name' => $result->membership->tenant->trade_name,
                 ],
                 'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'status' => $user->status,
-                    'locale' => $user->locale,
+                    'id' => $result->user->id,
+                    'name' => $result->user->name,
+                    'email' => $result->user->email,
+                    'status' => $result->user->status,
+                    'locale' => $result->user->locale,
                 ],
                 'membership' => [
-                    'id' => $membership->id,
-                    'role' => $membership->role,
-                    'is_primary' => $membership->is_primary,
-                    'accepted_at' => $membership->accepted_at?->toIso8601String(),
-                    'permissions' => $membership->permissions_json ?? [],
-                    'granted_abilities' => $tenantPermissionMatrix->grantedAbilities($membership),
+                    'id' => $result->membership->id,
+                    'role' => $result->membership->role,
+                    'is_primary' => $result->membership->is_primary,
+                    'accepted_at' => $result->membership->accepted_at?->toIso8601String(),
+                    'permissions' => $result->membership->permissions_json ?? [],
+                    'granted_abilities' => $result->grantedAbilities,
                 ],
             ],
         ], 201);

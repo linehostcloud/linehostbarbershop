@@ -20,6 +20,10 @@ class TenantPermissionMatrix
             'appointments.*',
             'orders.*',
             'finance.*',
+            'messages.*',
+            'whatsapp.providers.*',
+            'whatsapp.operations.read',
+            'observability.read',
         ],
         'finance' => [
             'tenant.read',
@@ -30,6 +34,9 @@ class TenantPermissionMatrix
             'clients.read',
             'appointments.read',
             'orders.read',
+            'messages.*',
+            'whatsapp.operations.read',
+            'observability.read',
         ],
         'receptionist' => [
             'tenant.read',
@@ -39,6 +46,7 @@ class TenantPermissionMatrix
             'appointments.*',
             'orders.*',
             'finance.read',
+            'messages.*',
         ],
         'professional' => [
             'tenant.read',
