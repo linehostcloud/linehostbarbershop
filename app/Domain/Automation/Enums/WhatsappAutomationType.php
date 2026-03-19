@@ -22,7 +22,7 @@ enum WhatsappAutomationType: string
     {
         return match ($this) {
             self::AppointmentReminder => 'Lembrete de Agendamento',
-            self::InactiveClientReactivation => 'Reativacao de Cliente Inativo',
+            self::InactiveClientReactivation => 'Reativação de Cliente Inativo',
         };
     }
 
@@ -30,7 +30,7 @@ enum WhatsappAutomationType: string
     {
         return match ($this) {
             self::AppointmentReminder => 'Envia lembretes determinísticos para agendamentos futuros elegíveis.',
-            self::InactiveClientReactivation => 'Envia mensagens de reativacao para clientes sem visitas recentes.',
+            self::InactiveClientReactivation => 'Envia mensagens de reativação para clientes sem visitas recentes.',
         };
     }
 }

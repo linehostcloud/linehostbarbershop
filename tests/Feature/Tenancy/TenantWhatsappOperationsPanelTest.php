@@ -4,14 +4,14 @@ namespace Tests\Feature\Tenancy;
 
 use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Tenant\Models\Tenant;
-use App\Infrastructure\Tenancy\TenantDatabaseManager;
-use Symfony\Component\HttpFoundation\Cookie;
+use Tests\Concerns\InteractsWithTenantWhatsappPanel;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
 class TenantWhatsappOperationsPanelTest extends TestCase
 {
     use RefreshTenantDatabases;
+    use InteractsWithTenantWhatsappPanel;
 
     public function test_operations_panel_redirects_to_login_when_unauthenticated(): void
     {
@@ -54,15 +54,16 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         $response
             ->assertOk()
             ->assertSee('Mensageria WhatsApp')
+            ->assertSee('Governança')
             ->assertSee('Resumo Operacional')
             ->assertSee('Agente Operacional')
-            ->assertSee('Saude por Provider')
-            ->assertSee('Camada Deterministica')
-            ->assertSee('Exige Atencao Agora')
+            ->assertSee('Saúde por Provider')
+            ->assertSee('Camada Determinística')
+            ->assertSee('Exige Atenção Agora')
             ->assertSee('Fila Operacional')
-            ->assertSee('Boundary Rejections')
+            ->assertSee('Rejeições de Boundary')
             ->assertSee('Feed Operacional')
-            ->assertSee('Deduplicacao')
+            ->assertSee('Deduplicação')
             ->assertSee('data-whatsapp-operations-panel', false)
             ->assertSee('data-control="provider"', false)
             ->assertSee('data-control="auto-refresh"', false)
@@ -160,7 +161,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
 
         $this->getJson($this->tenantLocalBrowserApiUrl($tenant, '/operations/whatsapp/summary'))
             ->assertUnauthorized()
-            ->assertJsonPath('message', 'Token de acesso ausente ou invalido.');
+            ->assertJsonPath('message', 'Token de acesso ausente ou inválido.');
     }
 
     public function test_user_without_operational_permission_cannot_log_in_to_the_panel(): void
@@ -178,7 +179,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
 
         $this->postPanelLogin($tenant, $user->email, 'password123')
             ->assertForbidden()
-            ->assertSee('Sem permissao para o painel operacional');
+            ->assertSee('Sem permissão para o painel operacional');
     }
 
     public function test_panel_shell_references_only_aggregated_operational_endpoints_and_does_not_expose_sensitive_data(): void
@@ -226,27 +227,12 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections/summary', false)
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections', false)
             ->assertSee('/api/v1/operations/whatsapp/feed', false)
-            ->assertSee('Camada Deterministica')
-            ->assertSee('Smart Routing')
+            ->assertSee('Camada Determinística')
+            ->assertSee('Roteamento Inteligente')
             ->assertDontSee('panel-super-secret-token')
             ->assertDontSee('panel-verify-secret')
             ->assertDontSee('panel-webhook-secret');
     }
-
-    private function panelUrl(Tenant $tenant): string
-    {
-        $domain = $tenant->domains()->value('domain');
-
-        return sprintf('http://%s/painel/operacoes/whatsapp', $domain);
-    }
-
-    private function panelLoginUrl(Tenant $tenant): string
-    {
-        $domain = $tenant->domains()->value('domain');
-
-        return sprintf('http://%s/painel/operacoes/whatsapp/login', $domain);
-    }
-
     /**
      * @param  array<string, mixed>  $attributes
      */
@@ -261,104 +247,5 @@ class TenantWhatsappOperationsPanelTest extends TestCase
                 'enabled' => true,
             ], $attributes))->id;
         });
-    }
-
-    private function cookieValue(\Illuminate\Testing\TestResponse $response, string $name): ?string
-    {
-        return $this->cookieFromResponse($response, $name)?->getValue();
-    }
-
-    private function panelLocalBrowserUrl(Tenant $tenant): string
-    {
-        return sprintf('http://%s/painel/operacoes/whatsapp', $this->tenantLocalBrowserHost($tenant));
-    }
-
-    private function panelLocalBrowserLoginUrl(Tenant $tenant): string
-    {
-        return sprintf('http://%s/painel/operacoes/whatsapp/login', $this->tenantLocalBrowserHost($tenant));
-    }
-
-    private function tenantLocalBrowserApiUrl(Tenant $tenant, string $path): string
-    {
-        return sprintf('http://%s/api/v1%s', $this->tenantLocalBrowserHost($tenant), $path);
-    }
-
-    private function tenantLocalBrowserHost(Tenant $tenant): string
-    {
-        return sprintf(
-            '%s.%s',
-            $tenant->slug,
-            config('tenancy.identification.local_browser_domain_suffix', 'sistema-barbearia.localhost'),
-        );
-    }
-
-    private function cookieFromResponse(\Illuminate\Testing\TestResponse $response, string $name): ?Cookie
-    {
-        /** @var array<int, Cookie> $cookies */
-        $cookies = $response->headers->getCookies();
-
-        foreach ($cookies as $cookie) {
-            if ($cookie->getName() === $name) {
-                return $cookie;
-            }
-        }
-
-        return null;
-    }
-
-    private function extractCsrfToken(string $html): ?string
-    {
-        if (! preg_match('/name="_token" value="([^"]+)"/', $html, $matches)) {
-            return null;
-        }
-
-        return $matches[1] ?? null;
-    }
-
-    private function postPanelLogin(
-        Tenant $tenant,
-        string $email,
-        string $password,
-        bool $localBrowser = false,
-    ): \Illuminate\Testing\TestResponse {
-        $loginUrl = $localBrowser
-            ? $this->panelLocalBrowserLoginUrl($tenant)
-            : $this->panelLoginUrl($tenant);
-        $sessionCookieName = (string) config('session.cookie');
-        $loginPage = $this->get($loginUrl);
-
-        $loginPage->assertOk();
-
-        $csrfToken = $this->extractCsrfToken((string) $loginPage->getContent());
-        $sessionCookie = $this->cookieValue($loginPage, $sessionCookieName);
-
-        $this->assertNotNull($csrfToken);
-        $this->assertNotNull($sessionCookie);
-
-        return $this
-            ->withUnencryptedCookie($sessionCookieName, (string) $sessionCookie)
-            ->post($loginUrl, [
-                '_token' => $csrfToken,
-                'email' => $email,
-                'password' => $password,
-            ]);
-    }
-
-
-    /**
-     * @template TReturn
-     *
-     * @param  \Closure(): TReturn  $callback
-     * @return TReturn
-     */
-    private function withTenantConnection(Tenant $tenant, \Closure $callback): mixed
-    {
-        app(TenantDatabaseManager::class)->connect($tenant);
-
-        try {
-            return $callback();
-        } finally {
-            app(TenantDatabaseManager::class)->disconnect();
-        }
     }
 }

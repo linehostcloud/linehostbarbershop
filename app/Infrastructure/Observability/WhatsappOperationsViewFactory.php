@@ -190,7 +190,7 @@ class WhatsappOperationsViewFactory
             'duplicate_prevented' => (bool) data_get($message?->payload_json ?? [], 'deduplication.duplicate_prevented', false),
             'duplicate_risk' => (bool) data_get($message?->payload_json ?? [], 'deduplication.duplicate_risk_detected', false),
             'event_name' => $outboxEvent->event_name,
-            'summary' => $outboxEvent->failure_reason ?: $outboxEvent->last_reclaim_reason ?: 'Item de outbox exige atencao operacional.',
+            'summary' => $outboxEvent->failure_reason ?: $outboxEvent->last_reclaim_reason ?: 'Item de outbox exige atenção operacional.',
             'details' => [
                 'attempt_count' => $outboxEvent->attempt_count,
                 'max_attempts' => $outboxEvent->max_attempts,
@@ -297,7 +297,7 @@ class WhatsappOperationsViewFactory
             'event_name' => 'integration_attempt.issue',
             'summary' => $attempt->status === 'duplicate_prevented'
                 ? 'Envio duplicado bloqueado antes do dispatch efetivo.'
-                : ($attempt->failure_reason ?: 'Tentativa de integracao exige atencao operacional.'),
+                : ($attempt->failure_reason ?: 'Tentativa de integração exige atenção operacional.'),
             'details' => [
                 'operation' => $attempt->operation,
                 'direction' => $attempt->direction,
@@ -356,8 +356,8 @@ class WhatsappOperationsViewFactory
             'occurred_at' => $audit->created_at?->toIso8601String(),
             'reference_id' => $audit->id,
             'message' => match ($action) {
-                'whatsapp_provider_config.activated' => 'Configuracao de provider ativada.',
-                'whatsapp_provider_config.deactivated' => 'Configuracao de provider desativada.',
+                'whatsapp_provider_config.activated' => 'Configuração de provider ativada.',
+                'whatsapp_provider_config.deactivated' => 'Configuração de provider desativada.',
                 default => 'Healthcheck administrativo executado.',
             },
             'details' => [
@@ -432,33 +432,33 @@ class WhatsappOperationsViewFactory
             'occurred_at' => $eventLog->occurred_at?->toIso8601String(),
             'reference_id' => $eventLog->id,
             'message' => match ($eventLog->event_name) {
-                'outbox.event.reclaim.blocked' => 'Reclaim automatico bloqueado; revisao manual exigida.',
-                'whatsapp.message.fallback.scheduled' => 'Fallback controlado agendado para o provider secundario.',
-                'whatsapp.message.fallback.executed' => 'Fallback controlado executado no provider secundario.',
+                'outbox.event.reclaim.blocked' => 'Reclaim automático bloqueado; revisão manual exigida.',
+                'whatsapp.message.fallback.scheduled' => 'Fallback controlado agendado para o provider secundário.',
+                'whatsapp.message.fallback.executed' => 'Fallback controlado executado no provider secundário.',
                 'whatsapp.message.duplicate_prevented' => 'Envio duplicado bloqueado antes do dispatch efetivo.',
-                'whatsapp.message.duplicate_risk_detected' => 'Risco de duplicidade detectado apos erro transitório no provider.',
+                'whatsapp.message.duplicate_risk_detected' => 'Risco de duplicidade detectado após erro transitório no provider.',
                 'whatsapp.automation.run.completed' => sprintf(
-                    'Automacao %s executada: %d candidatos, %d mensagens enfileiradas e %d skips.',
+                    'Automação %s executada: %d candidatos, %d mensagens enfileiradas e %d skips.',
                     (string) data_get($eventLog->payload_json, 'automation_type', 'whatsapp'),
                     (int) data_get($eventLog->payload_json, 'candidates_found', 0),
                     (int) data_get($eventLog->payload_json, 'messages_queued', 0),
                     (int) data_get($eventLog->payload_json, 'skipped_total', 0),
                 ),
                 'whatsapp.automation.run.failed' => sprintf(
-                    'Automacao %s falhou durante o processamento.',
+                    'Automação %s falhou durante o processamento.',
                     (string) data_get($eventLog->payload_json, 'automation_type', 'whatsapp'),
                 ),
                 'whatsapp.agent.run.completed' => sprintf(
-                    'Agente operacional concluiu a analise: %d insights criados, %d atualizados e %d resolvidos.',
+                    'Agente operacional concluiu a análise: %d insights criados, %d atualizados e %d resolvidos.',
                     (int) data_get($eventLog->payload_json, 'insights_created', 0),
                     (int) data_get($eventLog->payload_json, 'insights_refreshed', 0),
                     (int) data_get($eventLog->payload_json, 'insights_resolved', 0),
                 ),
-                'whatsapp.agent.run.failed' => 'Agente operacional falhou durante a analise recente.',
+                'whatsapp.agent.run.failed' => 'Agente operacional falhou durante a análise recente.',
                 'whatsapp.agent.insight.created' => (string) data_get($eventLog->payload_json, 'title', 'Insight operacional criado.'),
                 'whatsapp.agent.insight.resolved' => 'Insight do agente foi marcado como resolvido.',
-                'whatsapp.agent.insight.ignored' => 'Insight do agente foi ignorado pela operacao.',
-                'whatsapp.agent.recommendation.executed' => 'Acao segura recomendada pelo agente foi executada.',
+                'whatsapp.agent.insight.ignored' => 'Insight do agente foi ignorado pela operação.',
+                'whatsapp.agent.recommendation.executed' => 'Ação segura recomendada pelo agente foi executada.',
                 default => 'Outbox stale recolocado para retry.',
             },
             'details' => [
@@ -560,7 +560,7 @@ class WhatsappOperationsViewFactory
                 ?: $attempt->last_attempt_at?->toIso8601String()
                 ?: $attempt->created_at?->toIso8601String(),
             'reference_id' => $attempt->id,
-            'message' => $attempt->failure_reason ?: 'Falha terminal de integracao de WhatsApp.',
+            'message' => $attempt->failure_reason ?: 'Falha terminal de integração de WhatsApp.',
             'details' => [
                 'message_id' => $attempt->message_id,
                 'outbox_event_id' => $attempt->outbox_event_id,

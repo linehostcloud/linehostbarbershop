@@ -265,7 +265,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         }
 
         if (results.every((result) => result.status === 'rejected')) {
-            showGlobalError('Nao foi possivel carregar os dados operacionais desta tela. Revise a sessao do tenant e tente atualizar manualmente.');
+            showGlobalError('Não foi possível carregar os dados operacionais desta tela. Revise a sessão do tenant e tente atualizar manualmente.');
         }
     }
 
@@ -281,7 +281,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderSummary(response.data);
             return response;
         } catch (error) {
-            renderSectionError(elements.summary, friendlyError(error, 'Nao foi possivel carregar o resumo operacional.'), 'summary');
+            renderSectionError(elements.summary, friendlyError(error, 'Não foi possível carregar o resumo operacional.'), 'summary');
             throw error;
         }
     }
@@ -299,13 +299,13 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderAgent(response.data);
             return response;
         } catch (error) {
-            renderSectionError(elements.agent, friendlyError(error, 'Nao foi possivel carregar os insights do agente operacional.'), 'agent');
+            renderSectionError(elements.agent, friendlyError(error, 'Não foi possível carregar os insights do agente operacional.'), 'agent');
             throw error;
         }
     }
 
     async function loadProviders() {
-        renderLoading(elements.providers, 'Carregando saude dos providers...');
+        renderLoading(elements.providers, 'Carregando saúde dos providers...');
 
         try {
             const response = await getJson(boot.urls.providers, compactParams({
@@ -323,13 +323,13 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderProviders(items);
             return response;
         } catch (error) {
-            renderSectionError(elements.providers, friendlyError(error, 'Nao foi possivel carregar a saude dos providers.'), 'providers');
+            renderSectionError(elements.providers, friendlyError(error, 'Não foi possível carregar a saúde dos providers.'), 'providers');
             throw error;
         }
     }
 
     async function loadAttention() {
-        renderLoading(elements.attention, 'Carregando itens que exigem atencao...');
+        renderLoading(elements.attention, 'Carregando itens que exigem atenção...');
 
         try {
             const response = await getJson(boot.urls.queue, compactParams({
@@ -342,7 +342,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderAttention(response.data || []);
             return response;
         } catch (error) {
-            renderSectionError(elements.attention, friendlyError(error, 'Nao foi possivel carregar o recorte de atencao imediata.'), 'attention');
+            renderSectionError(elements.attention, friendlyError(error, 'Não foi possível carregar o recorte de atenção imediata.'), 'attention');
             throw error;
         }
     }
@@ -361,7 +361,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderPagination(elements.queuePagination, 'queue', response.meta);
             return response;
         } catch (error) {
-            renderSectionError(elements.queue, friendlyError(error, 'Nao foi possivel carregar a fila operacional.'), 'queue');
+            renderSectionError(elements.queue, friendlyError(error, 'Não foi possível carregar a fila operacional.'), 'queue');
             throw error;
         }
     }
@@ -380,7 +380,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
     }
 
     async function loadBoundarySummary() {
-        renderLoading(elements.boundarySummary, 'Carregando resumo de boundary rejections...');
+        renderLoading(elements.boundarySummary, 'Carregando resumo de rejeições de boundary...');
 
         try {
             const response = await getJson(boot.urls.boundary_summary, compactParams({
@@ -391,13 +391,13 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderBoundarySummary(response.data);
             return response;
         } catch (error) {
-            renderSectionError(elements.boundarySummary, friendlyError(error, 'Nao foi possivel carregar o resumo de boundary rejections.'), 'boundary');
+            renderSectionError(elements.boundarySummary, friendlyError(error, 'Não foi possível carregar o resumo de rejeições de boundary.'), 'boundary');
             throw error;
         }
     }
 
     async function loadBoundaryList() {
-        renderLoading(elements.boundaryList, 'Carregando rejeicoes recentes...');
+        renderLoading(elements.boundaryList, 'Carregando rejeições recentes...');
 
         if (elements.boundaryPagination) {
             elements.boundaryPagination.innerHTML = '';
@@ -415,7 +415,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderPagination(elements.boundaryPagination, 'boundary', response.meta);
             return response;
         } catch (error) {
-            renderSectionError(elements.boundaryList, friendlyError(error, 'Nao foi possivel carregar a lista de rejeicoes.'), 'boundary');
+            renderSectionError(elements.boundaryList, friendlyError(error, 'Não foi possível carregar a lista de rejeições.'), 'boundary');
             throw error;
         }
     }
@@ -441,7 +441,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             renderPagination(elements.feedPagination, 'feed', response.meta);
             return response;
         } catch (error) {
-            renderSectionError(elements.feed, friendlyError(error, 'Nao foi possivel carregar o feed operacional.'), 'feed');
+            renderSectionError(elements.feed, friendlyError(error, 'Não foi possível carregar o feed operacional.'), 'feed');
             throw error;
         }
     }
@@ -469,7 +469,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             return response.data;
         } catch (error) {
             if (error?.response?.status === 401 || error?.response?.status === 403) {
-                showGlobalError('A sessao do painel expirou ou nao possui mais permissao para esta operacao. Atualize a pagina ou faca login novamente.');
+                showGlobalError('A sessão do painel expirou ou não possui mais permissão para esta operação. Atualize a página ou faça login novamente.');
             }
 
             throw error;
@@ -490,7 +490,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 title: 'Tentativas recentes',
                 value: cards.attempts_recent_total || 0,
                 tone: 'slate',
-                caption: 'Tentativas de envio e integracao no periodo.',
+                caption: 'Tentativas de envio e integração no período.',
                 rows: summarizeRows(payload?.integration_attempts?.status_totals || [], 'status', 4),
             },
             {
@@ -511,21 +511,21 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 title: 'Fallbacks agendados',
                 value: cards.fallback_scheduled_total || 0,
                 tone: Number(cards.fallback_scheduled_total || 0) > 0 ? 'amber' : 'emerald',
-                caption: 'Troca controlada para provider secundario.',
+                caption: 'Troca controlada para provider secundário.',
                 rows: [],
             },
             {
                 title: 'Fallbacks executados',
                 value: cards.fallback_executed_total || 0,
                 tone: Number(cards.fallback_executed_total || 0) > 0 ? 'amber' : 'emerald',
-                caption: 'Execucoes efetivas com secundario na janela.',
+                caption: 'Execuções efetivas com secundário na janela.',
                 rows: [],
             },
             {
                 title: 'Duplicados bloqueados',
                 value: cards.duplicate_prevented_total || 0,
                 tone: Number(cards.duplicate_prevented_total || 0) > 0 ? 'slate' : 'emerald',
-                caption: 'Deduplicacao bloqueou reenvios logicos com sucesso conhecido.',
+                caption: 'Deduplicação bloqueou reenvios lógicos com sucesso conhecido.',
                 rows: [],
             },
             {
@@ -536,26 +536,26 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 rows: [],
             },
             {
-                title: 'Automacoes executadas',
+                title: 'Automações executadas',
                 value: cards.automation_runs_total || 0,
                 tone: Number(cards.automation_runs_total || 0) > 0 ? 'slate' : 'stone',
-                caption: 'Runs de automacao processados na janela.',
+                caption: 'Execuções de automação processadas na janela.',
                 rows: summarizeRows(payload?.automations?.type_totals || [], 'type', 3),
             },
             {
-                title: 'Mensagens por automacao',
+                title: 'Mensagens por automação',
                 value: cards.automation_messages_queued_total || 0,
                 tone: Number(cards.automation_messages_queued_total || 0) > 0 ? 'slate' : 'stone',
-                caption: 'Mensagens enfileiradas pelo motor de automacao.',
+                caption: 'Mensagens enfileiradas pelo motor de automação.',
                 rows: [],
             },
             {
-                title: 'Skips de automacao',
+                title: 'Skips de automação',
                 value: cards.automation_skipped_total || 0,
                 tone: Number(cards.automation_skipped_total || 0) > 0 ? 'amber' : 'emerald',
                 caption: Number(cards.automation_failed_total || 0) > 0
-                    ? `${cards.automation_failed_total || 0} falhas de automacao exigem revisao.`
-                    : 'Execucoes puladas por cooldown, elegibilidade ou contato.',
+                    ? `${cards.automation_failed_total || 0} falhas de automação exigem revisão.`
+                    : 'Execuções puladas por cooldown, elegibilidade ou contato.',
                 rows: summarizeRows(payload?.automations?.skip_reason_totals || [], 'reason', 3),
             },
             {
@@ -563,7 +563,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 value: cards.agent_active_insights_total || 0,
                 tone: Number(cards.agent_high_severity_total || 0) > 0 ? 'rose' : (Number(cards.agent_active_insights_total || 0) > 0 ? 'amber' : 'emerald'),
                 caption: Number(cards.agent_high_severity_total || 0) > 0
-                    ? `${cards.agent_high_severity_total || 0} alertas de alta severidade aguardam revisao.`
+                    ? `${cards.agent_high_severity_total || 0} alertas de alta severidade aguardam revisão.`
                     : 'Estado atual do agente operacional prudente.',
                 rows: [],
             },
@@ -578,7 +578,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 title: 'Boundary rejections',
                 value: cards.boundary_rejections_total || 0,
                 tone: Number(cards.boundary_rejections_total || 0) > 0 ? 'rose' : 'emerald',
-                caption: 'Rejeicoes de boundary em endpoint, payload ou assinatura.',
+                caption: 'Rejeições de boundary em endpoint, payload ou assinatura.',
                 rows: summarizeRows(payload?.boundary_rejections?.code_totals || [], 'code', 3),
             },
             {
@@ -616,21 +616,21 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             metricTile(
                 'Insights Ativos',
                 summary.active_total || 0,
-                'Recomendacoes e alertas ainda abertos.',
+                'Recomendações e alertas ainda abertos.',
                 Number(summary.high_severity_total || 0) > 0 ? 'amber' : 'emerald',
             ),
             metricTile(
                 'Alta Severidade',
                 summary.high_severity_total || 0,
-                'Alertas que merecem triagem humana rapida.',
+                'Alertas que merecem triagem humana rápida.',
                 Number(summary.high_severity_total || 0) > 0 ? 'rose' : 'emerald',
             ),
             metricTile(
-                'Ultimo Run',
+                'Último Run',
                 latestRun?.status || 'sem run',
                 latestRun?.completed_at
-                    ? `Concluido em ${formatDateTime(latestRun.completed_at)}`
-                    : 'Sem execucao recente registrada.',
+                    ? `Concluído em ${formatDateTime(latestRun.completed_at)}`
+                    : 'Sem execução recente registrada.',
                 latestRun?.status === 'failed' ? 'rose' : 'slate',
             ),
         ];
@@ -645,7 +645,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                     <div class="mb-2 flex flex-wrap gap-1.5">
                         ${(summary.type_totals || []).length > 0
                             ? summary.type_totals.map((item) => badge(`${item.type} · ${item.total}`, item.total > 0 ? 'stone' : 'emerald')).join('')
-                            : '<span class="text-sm text-slate-500">Sem distribuicao de insights ativa no momento.</span>'}
+                            : '<span class="text-sm text-slate-500">Sem distribuição de insights ativa no momento.</span>'}
                     </div>
                 </div>
 
@@ -667,7 +667,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                                         <p class="mt-2 text-sm leading-6 text-slate-600">${e(item.summary || 'Sem resumo adicional.')}</p>
                                         <div class="mt-3 flex flex-wrap gap-1.5">
                                             ${item.target_label ? badge(item.target_label, 'stone') : ''}
-                                            ${item.suggested_action ? badge(`acao ${item.suggested_action}`, item.execution_mode === 'manual_safe_action' ? 'emerald' : 'amber') : ''}
+                                            ${item.suggested_action ? badge(`ação ${item.suggested_action}`, item.execution_mode === 'manual_safe_action' ? 'emerald' : 'amber') : ''}
                                         </div>
                                         <p class="mt-2 text-xs leading-5 text-slate-500">
                                             ${agentEvidenceLine(item)}
@@ -688,8 +688,8 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
         if (!Array.isArray(filteredItems) || filteredItems.length === 0) {
             renderEmpty(elements.providers, state.provider
-                ? 'Nenhuma configuracao operacional encontrada para o provider filtrado.'
-                : 'Nenhum provider configurado para esta operacao.');
+                ? 'Nenhuma configuração operacional encontrada para o provider filtrado.'
+                : 'Nenhum provider configurado para esta operação.');
             return;
         }
 
@@ -707,12 +707,12 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                             <div class="flex flex-wrap items-center gap-2">
                                 <h3 class="text-base font-semibold text-slate-950">${e(item.provider || 'n/d')}</h3>
                                 ${badge(item.slot || 'sem slot', 'slate')}
-                                ${badge(item.enabled ? 'enabled' : 'disabled', item.enabled ? 'emerald' : 'stone')}
+                                ${badge(item.enabled ? 'habilitado' : 'desabilitado', item.enabled ? 'emerald' : 'stone')}
                             </div>
-                            <p class="mt-2 text-sm leading-6 text-slate-600">${e(operationalState.reason || 'Sem explicacao operacional disponivel.')}</p>
+                            <p class="mt-2 text-sm leading-6 text-slate-600">${e(operationalState.reason || 'Sem explicação operacional disponível.')}</p>
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
-                            ${badge(operationalState.label || 'unknown', stateTone(operationalState.tone))}
+                            ${badge(providerStateLabel(operationalState.label || 'unknown'), stateTone(operationalState.tone))}
                             ${renderInlineHealthBadge(item.last_healthcheck)}
                         </div>
                     </div>
@@ -741,7 +741,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                                 <div class="mt-2 flex flex-wrap gap-1.5">
                                     ${(item.signal_totals || []).length > 0
                                         ? item.signal_totals.map((signal) => badge(`${signal.code} · ${signal.total}`, errorTone(signal.code))).join('')
-                                        : '<span class="text-sm text-slate-500">Nenhum sinal critico agregado.</span>'}
+                                        : '<span class="text-sm text-slate-500">Nenhum sinal crítico agregado.</span>'}
                                 </div>
                             </div>
 
@@ -756,12 +756,12 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         </div>
 
                         <div class="rounded-2xl border border-stone-200 bg-white px-4 py-3">
-                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ultimos Sinais</p>
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Últimos Sinais</p>
                             <dl class="mt-3 space-y-2 text-sm">
-                                ${providerDetailRow('Janela de saude', item.health_window?.label || state.window)}
+                                ${providerDetailRow('Janela de saúde', item.health_window?.label || state.window)}
                                 ${providerDetailRow('Healthcheck', healthcheckText(item.last_healthcheck))}
-                                ${providerDetailRow('Ultima atividade', formatDateTime(item.last_activity_at))}
-                                ${providerDetailRow('Ultima validacao', formatDateTime(item.last_validated_at))}
+                                ${providerDetailRow('Última atividade', formatDateTime(item.last_activity_at))}
+                                ${providerDetailRow('Última validação', formatDateTime(item.last_validated_at))}
                                 ${providerDetailRow('Atualizado em', formatDateTime(item.updated_at))}
                             </dl>
                         </div>
@@ -811,7 +811,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
     function renderQueue(items) {
         if (!Array.isArray(items) || items.length === 0) {
-            renderEmpty(elements.queue, 'Nenhum item exige atencao com os filtros atuais.');
+            renderEmpty(elements.queue, 'Nenhum item exige atenção com os filtros atuais.');
             return;
         }
 
@@ -819,14 +819,14 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             <table class="min-w-full border-separate border-spacing-0 text-left text-sm">
                 <thead>
                     <tr class="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Atencao</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Atenção</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Provider</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Estado Atual</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Tentativa</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Fallback</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Referencia</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Resumo</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Horario</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Horário</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -887,17 +887,17 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                     <div class="flex flex-wrap gap-1.5">
                         ${codeTotals.length > 0
                             ? codeTotals.slice(0, 8).map((row) => badge(`${row.code} · ${row.total}`, errorTone(row.code))).join('')
-                            : '<span class="text-sm text-slate-500">Nenhuma rejeicao no periodo.</span>'}
+                            : '<span class="text-sm text-slate-500">Nenhuma rejeição no período.</span>'}
                     </div>
                 </div>
 
                 <div class="grid gap-3 sm:grid-cols-2">
                     <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
-                        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Direcao</p>
+                        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Direção</p>
                         <ul class="space-y-1.5">
                             ${directionTotals.length > 0
                                 ? directionTotals.map((row) => `<li class="flex justify-between gap-3 text-sm"><span class="text-slate-600">${e(row.direction)}</span><span class="font-semibold text-slate-900">${e(String(row.total))}</span></li>`).join('')
-                                : '<li class="text-sm text-slate-500">Sem distribuicao.</li>'}
+                                : '<li class="text-sm text-slate-500">Sem distribuição.</li>'}
                         </ul>
                     </div>
                     <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
@@ -911,7 +911,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 </div>
 
                 <div class="rounded-2xl border border-stone-200 bg-white px-3 py-3">
-                    <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ultimas rejeicoes</p>
+                    <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Últimas rejeições</p>
                     <ul class="space-y-2">
                         ${latest.length > 0
                             ? latest.slice(0, 3).map((item) => `
@@ -923,7 +923,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                                     <div class="mt-1 text-xs leading-5 text-slate-500">${e(item.endpoint || 'Sem endpoint')} · ${e(item.direction || 'n/d')}</div>
                                 </li>
                             `).join('')
-                            : '<li class="text-sm text-slate-500">Nenhuma rejeicao recente.</li>'}
+                            : '<li class="text-sm text-slate-500">Nenhuma rejeição recente.</li>'}
                     </ul>
                 </div>
             </div>
@@ -932,7 +932,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
     function renderBoundaryList(items) {
         if (!Array.isArray(items) || items.length === 0) {
-            renderEmpty(elements.boundaryList, 'Nenhuma rejeicao recente na janela selecionada.');
+            renderEmpty(elements.boundaryList, 'Nenhuma rejeição recente na janela selecionada.');
             return;
         }
 
@@ -940,8 +940,8 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             <table class="min-w-full border-separate border-spacing-0 text-left text-sm">
                 <thead>
                     <tr class="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Codigo</th>
-                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Direcao</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Código</th>
+                        <th class="border-b border-stone-200 px-3 py-2 font-semibold">Direção</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Endpoint</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Provider</th>
                         <th class="border-b border-stone-200 px-3 py-2 font-semibold">Horario</th>
@@ -981,7 +981,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div class="min-w-0">
                                 <div class="flex flex-wrap gap-1.5">
-                                    ${badge(item.source || 'source', sourceTone(item.source))}
+                                    ${badge(item.source || 'origem', sourceTone(item.source))}
                                     ${item.type ? badge(item.type, typeTone(item.type)) : ''}
                                     ${severityBadge(item.severity)}
                                     ${item.status ? badge(item.status, statusTone(item.status)) : ''}
@@ -1044,7 +1044,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
         container.innerHTML = `
             <div class="flex flex-col gap-2 border-t border-stone-200 pt-3 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-                <div>Pagina ${e(String(currentPage))} de ${e(String(lastPage))} · ${e(String(meta.total || 0))} registros</div>
+                <div>Página ${e(String(currentPage))} de ${e(String(lastPage))} · ${e(String(meta.total || 0))} registros</div>
                 <div class="flex gap-2">
                     <button
                         type="button"
@@ -1064,7 +1064,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         ${currentPage >= lastPage ? 'disabled' : ''}
                         class="inline-flex items-center justify-center rounded-2xl border border-stone-300 bg-white px-3 py-2 font-medium text-slate-700 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-45"
                     >
-                        Proxima
+                        Próxima
                     </button>
                 </div>
             </div>
@@ -1129,8 +1129,8 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         }
 
         elements.autoRefreshState.textContent = state.autoRefresh
-            ? 'Auto refresh 60s ativo'
-            : 'Auto refresh desligado';
+            ? 'Atualização automática a cada 60s'
+            : 'Atualização automática desligada';
     }
 
     function showGlobalError(message) {
@@ -1232,7 +1232,7 @@ function healthcheckText(lastHealthcheck) {
     }
 
     const notes = [
-        lastHealthcheck.healthy ? 'healthy' : 'unhealthy',
+        lastHealthcheck.healthy ? 'saudável' : 'com falha',
     ];
 
     if (lastHealthcheck.http_status) {
@@ -1262,6 +1262,21 @@ function compareAttentionItems(left, right) {
     return String(right?.occurred_at || '').localeCompare(String(left?.occurred_at || ''));
 }
 
+function providerStateLabel(label) {
+    switch (label) {
+        case 'healthy':
+            return 'saudável';
+        case 'degraded':
+            return 'degradado';
+        case 'unstable':
+            return 'instável';
+        case 'unavailable':
+            return 'indisponível';
+        default:
+            return 'desconhecido';
+    }
+}
+
 function attentionRank(severity) {
     switch (severity) {
         case 'high':
@@ -1282,7 +1297,7 @@ function agentEvidenceLine(item) {
     }
 
     if (evidence.eligible_candidates_at_least !== undefined && evidence.eligible_candidates_at_least !== null) {
-        notes.push(`elegiveis >= ${evidence.eligible_candidates_at_least}`);
+        notes.push(`elegíveis >= ${evidence.eligible_candidates_at_least}`);
     }
 
     if (evidence.total !== undefined && evidence.total !== null) {
@@ -1298,10 +1313,10 @@ function agentEvidenceLine(item) {
     }
 
     if (evidence.last_executed_at) {
-        notes.push(`ultimo run ${formatDateTime(evidence.last_executed_at)}`);
+        notes.push(`último run ${formatDateTime(evidence.last_executed_at)}`);
     }
 
-    return notes.length > 0 ? notes.join(' · ') : 'Sem evidencia adicional agregada.';
+    return notes.length > 0 ? notes.join(' · ') : 'Sem evidência adicional agregada.';
 }
 
 function attentionLabel(type) {
@@ -1311,13 +1326,13 @@ function attentionLabel(type) {
         case 'outbox_reclaimed_recently':
             return 'reclaim recente';
         case 'outbox_manual_review_required':
-            return 'revisao manual';
+            return 'revisão manual';
         case 'message_terminal_failure':
             return 'falha terminal';
         case 'integration_attempt_issue':
             return 'tentativa com erro';
         default:
-            return type || 'atencao';
+            return type || 'atenção';
     }
 }
 
@@ -1560,7 +1575,7 @@ function queueOperationalNote(item) {
     const notes = [];
 
     if (details.decision_reason) {
-        notes.push(`decisao ${details.decision_reason}`);
+        notes.push(`decisão ${details.decision_reason}`);
     }
 
     if (details.last_reclaim_reason) {
@@ -1627,7 +1642,7 @@ function feedReferenceBadges(item) {
     }
 
     if (details.automation_type) {
-        badgesList.push(badge(`automacao ${details.automation_type}`, 'stone'));
+        badgesList.push(badge(`automação ${details.automation_type}`, 'stone'));
     }
 
     if (details.insight_type) {
@@ -1643,7 +1658,7 @@ function feedReferenceBadges(item) {
     }
 
     if (item.direction) {
-        badgesList.push(badge(`direcao ${item.direction}`, 'stone'));
+        badgesList.push(badge(`direção ${item.direction}`, 'stone'));
     }
 
     if (details.endpoint) {
@@ -1662,7 +1677,7 @@ function feedSecondaryLine(item) {
     }
 
     if (details.decision_reason) {
-        notes.push(`decisao ${details.decision_reason}`);
+        notes.push(`decisão ${details.decision_reason}`);
     }
 
     if (details.reason) {
@@ -1698,7 +1713,7 @@ function feedSecondaryLine(item) {
     }
 
     if (details.suggested_action) {
-        notes.push(`acao ${details.suggested_action}`);
+        notes.push(`ação ${details.suggested_action}`);
     }
 
     if (details.http_status) {
@@ -1730,12 +1745,12 @@ function feedSecondaryLine(item) {
     }
 
     if (Array.isArray(details.result)) {
-        notes.push('resultado sanitizado disponivel');
+        notes.push('resultado sanitizado disponível');
     }
 
     if (details.result && typeof details.result === 'object') {
         if (Object.prototype.hasOwnProperty.call(details.result, 'healthy')) {
-            notes.push(details.result.healthy ? 'healthcheck healthy' : 'healthcheck unhealthy');
+            notes.push(details.result.healthy ? 'healthcheck saudável' : 'healthcheck com falha');
         }
 
         if (details.result.latency_ms) {

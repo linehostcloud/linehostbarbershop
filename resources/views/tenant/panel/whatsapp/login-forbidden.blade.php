@@ -6,11 +6,9 @@
     <div class="mx-auto flex min-h-[80vh] max-w-xl items-center">
         <div class="w-full rounded-3xl border border-rose-200 bg-white/94 p-8 shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur">
             <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-rose-700">Acesso Negado</p>
-            <h1 class="mt-2 text-2xl font-semibold text-slate-950">Sem permissao para o painel operacional</h1>
+            <h1 class="mt-2 text-2xl font-semibold text-slate-950">Sem permissão para o painel operacional</h1>
             <p class="mt-3 text-sm leading-6 text-slate-600">
-                O usuario autenticado nao possui a ability
-                <span class="font-medium text-slate-900">whatsapp.operations.read</span>
-                neste tenant.
+                O usuário autenticado não possui as permissões necessárias para acessar este painel neste tenant.
             </p>
 
             <div class="mt-6 flex flex-wrap gap-3">

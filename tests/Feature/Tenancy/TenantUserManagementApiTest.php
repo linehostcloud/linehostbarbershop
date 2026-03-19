@@ -153,7 +153,7 @@ class TenantUserManagementApiTest extends TestCase
         $this->withHeader('Authorization', 'Bearer '.$oldToken)
             ->getJson($this->tenantUrl($tenant, '/auth/me'))
             ->assertStatus(401)
-            ->assertJsonPath('message', 'Token de acesso ausente ou invalido.');
+            ->assertJsonPath('message', 'Token de acesso ausente ou inválido.');
 
         $this->postJson($this->tenantUrl($tenant, '/auth/login'), [
             'email' => 'gestor@barbearia-reset.test',

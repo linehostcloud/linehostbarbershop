@@ -6,6 +6,7 @@ use App\Domain\Communication\Models\Message;
 use App\Domain\Observability\Models\EventLog;
 use App\Infrastructure\Persistence\TenantModel;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Automation extends TenantModel
@@ -56,6 +57,11 @@ class Automation extends TenantModel
     public function runs(): HasMany
     {
         return $this->hasMany(AutomationRun::class);
+    }
+
+    public function latestRun(): HasOne
+    {
+        return $this->hasOne(AutomationRun::class)->latestOfMany('started_at');
     }
 
     public function runTargets(): HasMany

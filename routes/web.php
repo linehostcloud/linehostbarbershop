@@ -1,5 +1,8 @@
 <?php
 
+use App\Http\Controllers\Web\TenantWhatsappAgentGovernanceController;
+use App\Http\Controllers\Web\TenantWhatsappAutomationGovernanceController;
+use App\Http\Controllers\Web\TenantWhatsappGovernancePanelController;
 use App\Http\Controllers\Web\TenantWhatsappOperationsPanelController;
 use App\Http\Controllers\Web\TenantWhatsappOperationsPanelLoginController;
 use App\Http\Controllers\Web\TenantWhatsappOperationsPanelLogoutController;
@@ -24,4 +27,20 @@ Route::middleware('tenant.resolve')->group(function (): void {
     Route::get('/painel/operacoes/whatsapp', TenantWhatsappOperationsPanelController::class)
         ->middleware(['tenant.auth', 'tenant.ability:whatsapp.operations.read'])
         ->name('tenant.panel.whatsapp.operations');
+
+    Route::get('/painel/operacoes/whatsapp/governanca', TenantWhatsappGovernancePanelController::class)
+        ->middleware('tenant.auth')
+        ->name('tenant.panel.whatsapp.governance');
+    Route::patch('/painel/operacoes/whatsapp/governanca/automacoes/{type}', [TenantWhatsappAutomationGovernanceController::class, 'update'])
+        ->middleware(['tenant.auth', 'tenant.ability:whatsapp.automations.write'])
+        ->name('tenant.panel.whatsapp.governance.automations.update');
+    Route::post('/painel/operacoes/whatsapp/governanca/agente/insights/{insight}/resolve', [TenantWhatsappAgentGovernanceController::class, 'resolve'])
+        ->middleware(['tenant.auth', 'tenant.ability:whatsapp.agent.write'])
+        ->name('tenant.panel.whatsapp.governance.agent.resolve');
+    Route::post('/painel/operacoes/whatsapp/governanca/agente/insights/{insight}/ignore', [TenantWhatsappAgentGovernanceController::class, 'ignore'])
+        ->middleware(['tenant.auth', 'tenant.ability:whatsapp.agent.write'])
+        ->name('tenant.panel.whatsapp.governance.agent.ignore');
+    Route::post('/painel/operacoes/whatsapp/governanca/agente/insights/{insight}/execute', [TenantWhatsappAgentGovernanceController::class, 'execute'])
+        ->middleware(['tenant.auth', 'tenant.ability:whatsapp.agent.write'])
+        ->name('tenant.panel.whatsapp.governance.agent.execute');
 });

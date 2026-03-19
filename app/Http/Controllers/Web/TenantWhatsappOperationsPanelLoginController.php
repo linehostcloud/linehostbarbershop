@@ -32,7 +32,15 @@ class TenantWhatsappOperationsPanelLoginController extends Controller
             userAgent: $request->userAgent(),
         );
 
-        if (! in_array('whatsapp.operations.read', $result->grantedAbilities, true) && ! in_array('*', $result->grantedAbilities, true)) {
+        $canReadOperations = in_array('whatsapp.operations.read', $result->grantedAbilities, true)
+            || in_array('*', $result->grantedAbilities, true);
+        $canReadGovernance = in_array('whatsapp.automations.read', $result->grantedAbilities, true)
+            || in_array('whatsapp.agent.read', $result->grantedAbilities, true)
+            || in_array('whatsapp.automations.*', $result->grantedAbilities, true)
+            || in_array('whatsapp.agent.*', $result->grantedAbilities, true)
+            || in_array('*', $result->grantedAbilities, true);
+
+        if (! $canReadOperations && ! $canReadGovernance) {
             $revokeTenantAccessToken->execute($result->accessToken);
 
             return response()->view('tenant.panel.whatsapp.login-forbidden', [
@@ -41,7 +49,7 @@ class TenantWhatsappOperationsPanelLoginController extends Controller
         }
 
         return redirect()
-            ->route('tenant.panel.whatsapp.operations')
+            ->route($canReadOperations ? 'tenant.panel.whatsapp.operations' : 'tenant.panel.whatsapp.governance')
             ->cookie($cookieFactory->make($result->plainTextToken, $result->accessToken->expires_at, $request));
     }
 }

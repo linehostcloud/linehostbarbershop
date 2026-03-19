@@ -154,6 +154,8 @@ Route::prefix('v1')->group(function (): void {
 
             Route::get('/admin/whatsapp-automations', [AdminWhatsappAutomationController::class, 'index'])
                 ->middleware('tenant.ability:whatsapp.automations.read');
+            Route::get('/admin/whatsapp-automations/runs', [AdminWhatsappAutomationController::class, 'runs'])
+                ->middleware('tenant.ability:whatsapp.automations.read');
             Route::get('/admin/whatsapp-automations/{type}', [AdminWhatsappAutomationController::class, 'show'])
                 ->middleware('tenant.ability:whatsapp.automations.read');
             Route::patch('/admin/whatsapp-automations/{type}', [AdminWhatsappAutomationController::class, 'update'])
@@ -162,6 +164,8 @@ Route::prefix('v1')->group(function (): void {
             Route::get('/admin/whatsapp-agent/insights', [AdminWhatsappAgentController::class, 'index'])
                 ->middleware('tenant.ability:whatsapp.agent.read');
             Route::get('/admin/whatsapp-agent/runs/latest', [AdminWhatsappAgentController::class, 'latestRun'])
+                ->middleware('tenant.ability:whatsapp.agent.read');
+            Route::get('/admin/whatsapp-agent/runs', [AdminWhatsappAgentController::class, 'runs'])
                 ->middleware('tenant.ability:whatsapp.agent.read');
             Route::post('/admin/whatsapp-agent/insights/{insight}/resolve', [AdminWhatsappAgentController::class, 'resolve'])
                 ->middleware('tenant.ability:whatsapp.agent.write');

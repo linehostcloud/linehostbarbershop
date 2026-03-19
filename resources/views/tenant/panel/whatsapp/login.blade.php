@@ -60,7 +60,7 @@
             </form>
 
             <p class="mt-5 text-xs leading-5 text-slate-500">
-                Esta interface consome apenas os endpoints operacionais existentes. Nenhum payload sensivel e exibido na camada visual.
+                Esta interface consome apenas os endpoints operacionais existentes. Nenhum payload sensível é exibido na camada visual.
             </p>
         </div>
     </div>

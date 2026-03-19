@@ -1,17 +1,17 @@
 @extends('layouts.tenant-panel')
 
-@section('title', 'Operacoes WhatsApp')
+@section('title', 'Operações WhatsApp')
 
 @section('content')
     @php
         $windows = (array) config('observability.whatsapp_operations.allowed_windows', ['24h', '7d', '30d']);
         $futureSignals = [
-            ['label' => 'Deduplicacao', 'description' => 'duplicate risk, duplicate prevented e deduplication key agora expostos no feed e na fila.'],
-            ['label' => 'Health Window', 'description' => 'janela de saude consolidada por provider, calculada no backend operacional.'],
-            ['label' => 'Smart Routing', 'description' => 'motivo da decisao operacional e caminho escolhido antes do dispatch.'],
-            ['label' => 'Decision Source', 'description' => 'primary_default, health_based_secondary, fallback_pinned ou manual_override.'],
-            ['label' => 'Automacoes', 'description' => 'runs, skip reasons e mensagens enfileiradas agora aparecem no resumo e no feed operacional.'],
-            ['label' => 'Agente Operacional', 'description' => 'insights, recomendacoes seguras e evidencias agora saem do backend com trilha auditavel.'],
+            ['label' => 'Deduplicação', 'description' => 'risco de duplicidade, duplicado bloqueado e chave de deduplicação agora expostos no feed e na fila.'],
+            ['label' => 'Janela de Saúde', 'description' => 'janela de saúde consolidada por provider, calculada no backend operacional.'],
+            ['label' => 'Roteamento Inteligente', 'description' => 'motivo da decisão operacional e caminho escolhido antes do dispatch.'],
+            ['label' => 'Origem da Decisão', 'description' => 'primary_default, health_based_secondary, fallback_pinned ou manual_override.'],
+            ['label' => 'Automações', 'description' => 'execuções, motivos de skip e mensagens enfileiradas agora aparecem no resumo e no feed operacional.'],
+            ['label' => 'Agente Operacional', 'description' => 'insights, recomendações seguras e evidências agora saem do backend com trilha auditável.'],
         ];
     @endphp
 
@@ -30,7 +30,7 @@
                         </span>
                     </div>
                     <p class="max-w-3xl text-sm leading-6 text-slate-600">
-                        Operacao quase em tempo real para enxergar saude, retries, fallbacks, rejeicoes e itens que exigem acao humana.
+                        Operação quase em tempo real para enxergar saúde, retentativas, fallbacks, rejeições e itens que exigem ação humana.
                     </p>
                 </div>
 
@@ -48,7 +48,7 @@
                     </label>
 
                     <label class="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Provider Global
+                        Provider global
                         <select
                             data-control="provider"
                             class="rounded-2xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900 outline-none transition focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100"
@@ -88,15 +88,17 @@
             </div>
 
             <div class="mt-4 flex flex-wrap items-center gap-3 border-t border-stone-200 pt-3 text-xs text-slate-500">
-                <span>Usuario: <span class="font-medium text-slate-700">{{ $user->name }}</span></span>
+                <span>Usuário: <span class="font-medium text-slate-700">{{ $user->name }}</span></span>
                 <span class="hidden text-stone-300 sm:inline">•</span>
                 <span>Papel: <span class="font-medium text-slate-700">{{ $membership->role }}</span></span>
                 <span class="hidden text-stone-300 sm:inline">•</span>
-                <span>Ultima atualizacao: <span data-last-updated class="font-medium text-slate-700">ainda nao carregado</span></span>
+                <span>Última atualização: <span data-last-updated class="font-medium text-slate-700">ainda não carregado</span></span>
                 <span class="hidden text-stone-300 sm:inline">•</span>
                 <span data-auto-refresh-state>Auto refresh desligado</span>
             </div>
         </header>
+
+        @include('tenant.panel.whatsapp.partials.navigation', ['navigation' => $navigation])
 
         <div data-global-error class="hidden rounded-3xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
 
@@ -104,7 +106,7 @@
             <div class="mb-3 flex items-start justify-between gap-3">
                 <div>
                     <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Resumo Operacional</h2>
-                    <p class="mt-1 text-sm text-slate-600">Leitura imediata da janela observada, com foco em falhas, retries, fallback, rejeicoes e pendencias de fila.</p>
+                    <p class="mt-1 text-sm text-slate-600">Leitura imediata da janela observada, com foco em falhas, retentativas, fallback, rejeições e pendências de fila.</p>
                 </div>
             </div>
             <div data-section="summary" class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -116,10 +118,10 @@
             <div class="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                     <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Agente Operacional</h2>
-                    <p class="mt-1 text-sm text-slate-600">Camada prudente de recomendacao sobre a operacao real, com evidencias objetivas, sem acao irreversivel automatica.</p>
+                    <p class="mt-1 text-sm text-slate-600">Camada prudente de recomendação sobre a operação real, com evidências objetivas, sem ação irreversível automática.</p>
                 </div>
                 <p class="max-w-md text-xs leading-5 text-slate-500">
-                    O agente apenas sugere por padrao. Quando houver acao segura, ela fica explicitamente marcada e auditavel.
+                    O agente apenas sugere por padrão. Quando houver ação segura, ela fica explicitamente marcada e auditável.
                 </p>
             </div>
             <div data-section="agent" class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando insights do agente...</div>
@@ -128,11 +130,11 @@
         <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
             <div class="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Saude por Provider</h2>
-                    <p class="mt-1 text-sm text-slate-600">Estado operacional, healthcheck, sinais de erro, retries e fallback por slot/provider, sem esconder degradacao real.</p>
+                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Saúde por Provider</h2>
+                    <p class="mt-1 text-sm text-slate-600">Estado operacional, healthcheck, sinais de erro, retentativas e fallback por slot/provider, sem esconder degradação real.</p>
                 </div>
                 <p class="max-w-md text-xs leading-5 text-slate-500">
-                    Esta camada continua consumindo apenas os endpoints operacionais existentes. A evolucao para deduplicacao, health window e smart routing fica preparada, sem reimplementar regra no frontend.
+                    Esta camada continua consumindo apenas os endpoints operacionais existentes. A evolução para deduplicação, janela de saúde e roteamento inteligente fica preparada, sem reimplementar regra no frontend.
                 </p>
             </div>
             <div data-section="providers" class="grid gap-3 xl:grid-cols-2">
@@ -142,8 +144,8 @@
 
         <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
             <div class="mb-3">
-                <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Camada Deterministica</h2>
-                <p class="mt-1 text-sm text-slate-600">Sinais de deduplicacao, health e roteamento que ja saem do backend prontos para leitura operacional, sem heuristica escondida no frontend.</p>
+                <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Camada Determinística</h2>
+                <p class="mt-1 text-sm text-slate-600">Sinais de deduplicação, saúde e roteamento que já saem do backend prontos para leitura operacional, sem heurística escondida no frontend.</p>
             </div>
 
             <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -159,8 +161,8 @@
 
         <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
             <div class="mb-3">
-                <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Exige Atencao Agora</h2>
-                <p class="mt-1 text-sm text-slate-600">Recorte rapido dos itens mais graves e recentes para apoiar acao humana imediata.</p>
+                <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Exige Atenção Agora</h2>
+                <p class="mt-1 text-sm text-slate-600">Recorte rápido dos itens mais graves e recentes para apoiar ação humana imediata.</p>
             </div>
             <div data-section="attention" class="grid gap-3 lg:grid-cols-2">
                 <div class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando itens criticos...</div>
@@ -171,7 +173,7 @@
             <div class="mb-3 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
                 <div>
                     <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Fila Operacional</h2>
-                    <p class="mt-1 text-sm text-slate-600">Itens com falha, retry, fallback ou bloqueio manual, com filtros aderentes aos parametros reais da API operacional.</p>
+                    <p class="mt-1 text-sm text-slate-600">Itens com falha, retry, fallback ou bloqueio manual, com filtros aderentes aos parâmetros reais da API operacional.</p>
                 </div>
 
                 <form data-form="queue-filters" class="grid gap-2 sm:grid-cols-2 xl:grid-cols-[12rem_14rem_auto]">
@@ -185,7 +187,7 @@
                         </select>
                     </label>
                     <label class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Codigo
+                        Código
                         <select data-control="queue-error-code" class="mt-1 w-full rounded-2xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm normal-case tracking-normal text-slate-900 outline-none transition focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100">
                             <option value="">Todos</option>
                             <option value="provider_unavailable">provider_unavailable</option>
@@ -211,19 +213,19 @@
         <section class="grid gap-4 xl:grid-cols-[0.92fr_1.38fr]">
             <div class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
                 <div class="mb-3">
-                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Boundary Rejections</h2>
-                    <p class="mt-1 text-sm text-slate-600">Volume por codigo, direcao e endpoint, sempre com serializacao segura.</p>
+                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Rejeições de Boundary</h2>
+                    <p class="mt-1 text-sm text-slate-600">Volume por código, direção e endpoint, sempre com serialização segura.</p>
                 </div>
-                <div data-section="boundary-summary" class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando rejeicoes...</div>
+                <div data-section="boundary-summary" class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando rejeições...</div>
             </div>
 
             <div class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
                 <div class="mb-3">
-                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Rejeicoes Recentes</h2>
+                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Rejeições Recentes</h2>
                     <p class="mt-1 text-sm text-slate-600">Consulta operacional curta, paginada e sem payload bruto.</p>
                 </div>
                 <div class="overflow-x-auto">
-                    <div data-section="boundary-list" class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando lista de rejeicoes...</div>
+                    <div data-section="boundary-list" class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando lista de rejeições...</div>
                 </div>
                 <div data-pagination="boundary" class="mt-3"></div>
             </div>
@@ -233,12 +235,12 @@
             <div class="mb-3 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
                 <div>
                     <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Feed Operacional</h2>
-                    <p class="mt-1 text-sm text-slate-600">Cronologia consolidada de retries, fallback, boundary, healthcheck e eventos relevantes do pipeline.</p>
+                    <p class="mt-1 text-sm text-slate-600">Cronologia consolidada de retentativas, fallback, boundary, healthcheck e eventos relevantes do pipeline.</p>
                 </div>
 
                 <form data-form="feed-filters" class="grid gap-2 sm:grid-cols-2 xl:grid-cols-[12rem_14rem_auto]">
                     <label class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Source
+                        Origem
                         <select data-control="feed-source" class="mt-1 w-full rounded-2xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm normal-case tracking-normal text-slate-900 outline-none transition focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100">
                             <option value="">Todos</option>
                             <option value="event_log">event_log</option>

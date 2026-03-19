@@ -51,7 +51,7 @@ class TenantAuthenticationApiTest extends TestCase
 
         $this->getJson($this->tenantUrl($tenant, '/clients'))
             ->assertStatus(401)
-            ->assertJsonPath('message', 'Token de acesso ausente ou invalido.');
+            ->assertJsonPath('message', 'Token de acesso ausente ou inválido.');
     }
 
     public function test_it_rejects_a_token_issued_for_another_tenant(): void
@@ -74,7 +74,7 @@ class TenantAuthenticationApiTest extends TestCase
         $this->withHeader('Authorization', 'Bearer '.$token)
             ->getJson($this->tenantUrl($secondaryTenant, '/clients'))
             ->assertStatus(401)
-            ->assertJsonPath('message', 'Token de acesso ausente ou invalido.');
+            ->assertJsonPath('message', 'Token de acesso ausente ou inválido.');
     }
 
     public function test_it_forbids_finance_writes_for_roles_without_that_ability(): void
@@ -123,7 +123,7 @@ class TenantAuthenticationApiTest extends TestCase
         $this->withHeader('Authorization', 'Bearer '.$token)
             ->getJson($this->tenantUrl($tenant, '/auth/me'))
             ->assertStatus(401)
-            ->assertJsonPath('message', 'Token de acesso ausente ou invalido.');
+            ->assertJsonPath('message', 'Token de acesso ausente ou inválido.');
     }
 
     private function tenantUrl(Tenant $tenant, string $path): string

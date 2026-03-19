@@ -33,7 +33,7 @@ class AuthenticateTenantAccessToken
         $bearerToken = $this->resolveToken($request);
 
         if ($tenant === null || blank($bearerToken)) {
-            $this->audit($request, WhatsappBoundaryRejectionCode::AuthenticationFailed, 401, 'Token de acesso ausente ou invalido.');
+            $this->audit($request, WhatsappBoundaryRejectionCode::AuthenticationFailed, 401, 'Token de acesso ausente ou inválido.');
 
             return $this->authenticationFailedResponse($request);
         }
@@ -41,7 +41,7 @@ class AuthenticateTenantAccessToken
         [$tokenId, $plainToken] = array_pad(explode('|', $bearerToken, 2), 2, null);
 
         if (blank($tokenId) || blank($plainToken)) {
-            $this->audit($request, WhatsappBoundaryRejectionCode::AuthenticationFailed, 401, 'Token de acesso ausente ou invalido.');
+            $this->audit($request, WhatsappBoundaryRejectionCode::AuthenticationFailed, 401, 'Token de acesso ausente ou inválido.');
 
             return $this->authenticationFailedResponse($request);
         }
@@ -56,7 +56,7 @@ class AuthenticateTenantAccessToken
             || ! hash_equals($accessToken->token_hash, hash('sha256', $plainToken))
             || $accessToken->isExpired()
         ) {
-            $this->audit($request, WhatsappBoundaryRejectionCode::AuthenticationFailed, 401, 'Token de acesso ausente ou invalido.');
+            $this->audit($request, WhatsappBoundaryRejectionCode::AuthenticationFailed, 401, 'Token de acesso ausente ou inválido.');
 
             return $this->authenticationFailedResponse($request);
         }
@@ -67,9 +67,9 @@ class AuthenticateTenantAccessToken
             ->first();
 
         if ($membership === null || ! $membership->isActive() || ! $accessToken->user->isActive()) {
-            $this->audit($request, WhatsappBoundaryRejectionCode::AuthorizationFailed, 403, 'O usuario autenticado nao possui acesso ativo a este tenant.');
+            $this->audit($request, WhatsappBoundaryRejectionCode::AuthorizationFailed, 403, 'O usuário autenticado não possui acesso ativo a este tenant.');
 
-            return $this->authorizationFailedResponse($request, 'O usuario autenticado nao possui acesso ativo a este tenant.');
+            return $this->authorizationFailedResponse($request, 'O usuário autenticado não possui acesso ativo a este tenant.');
         }
 
         $accessToken->forceFill([
@@ -103,16 +103,17 @@ class AuthenticateTenantAccessToken
             return $headerToken;
         }
 
+        if ($request->routeIs('tenant.panel.whatsapp.*')) {
+            return $this->resolvePanelCookieToken($request);
+        }
+
         if (! in_array($request->getMethod(), ['GET', 'HEAD'], true)) {
             return null;
         }
 
         $path = ltrim($request->path(), '/');
 
-        if (
-            ! str_starts_with($path, 'api/v1/operations/whatsapp')
-            && ! $request->routeIs('tenant.panel.whatsapp.operations')
-        ) {
+        if (! str_starts_with($path, 'api/v1/operations/whatsapp')) {
             return null;
         }
 
@@ -155,7 +156,7 @@ class AuthenticateTenantAccessToken
         if ($request->expectsJson() || $request->is('api/*') || $request->is('webhooks/*')) {
             return response()->json([
                 'boundary_rejection_code' => WhatsappBoundaryRejectionCode::AuthenticationFailed->value,
-                'message' => 'Token de acesso ausente ou invalido.',
+                'message' => 'Token de acesso ausente ou inválido.',
             ], 401);
         }
 

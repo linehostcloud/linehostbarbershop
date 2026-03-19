@@ -3,8 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Application\Actions\Agent\ExecuteWhatsappAgentInsightAction;
+use App\Application\Actions\Agent\IgnoreWhatsappAgentInsightAction;
 use App\Application\Actions\Agent\RecordWhatsappAgentAdminAuditAction;
-use App\Application\Actions\Agent\RecordWhatsappAgentEventAction;
+use App\Application\Actions\Agent\ResolveWhatsappAgentInsightAction;
 use App\Domain\Agent\Models\AgentInsight;
 use App\Domain\Agent\Models\AgentRun;
 use App\Http\Controllers\Controller;
@@ -71,39 +72,42 @@ class AdminWhatsappAgentController extends Controller
         ]);
     }
 
+    public function runs(
+        Request $request,
+        WhatsappAgentInsightViewFactory $viewFactory,
+    ): JsonResponse {
+        $validated = $request->validate([
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        $paginator = AgentRun::query()
+            ->where('channel', 'whatsapp')
+            ->latest('started_at')
+            ->paginate((int) ($validated['per_page'] ?? 20));
+
+        return response()->json([
+            'data' => collect($paginator->items())
+                ->map(fn (AgentRun $run): array => $viewFactory->runSummary($run))
+                ->values()
+                ->all(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'per_page' => $paginator->perPage(),
+                'last_page' => $paginator->lastPage(),
+                'total' => $paginator->total(),
+            ],
+        ]);
+    }
+
     public function resolve(
         Request $request,
         AgentInsight $insight,
+        ResolveWhatsappAgentInsightAction $resolveInsight,
         RecordWhatsappAgentAdminAuditAction $recordAudit,
-        RecordWhatsappAgentEventAction $recordEvent,
         WhatsappAgentInsightViewFactory $viewFactory,
     ): JsonResponse {
-        abort_if($insight->status !== 'active', 422, 'Somente insights ativos podem ser resolvidos manualmente.');
-
         $before = $viewFactory->snapshot($insight);
-
-        $insight->forceFill([
-            'status' => 'resolved',
-            'resolved_at' => now(),
-        ])->save();
-
-        if ($insight->run !== null) {
-            $recordEvent->execute(
-                run: $insight->run,
-                insight: $insight,
-                eventName: 'whatsapp.agent.insight.resolved',
-                payload: [
-                    'insight_id' => $insight->id,
-                    'insight_type' => $insight->type,
-                    'resolution_reason' => 'manual_resolve',
-                ],
-                result: [
-                    'status' => 'resolved',
-                ],
-                idempotencyKey: sprintf('agent-insight-resolved-manual:%s', $insight->id),
-                occurredAt: now(),
-            );
-        }
+        $insight = $resolveInsight->execute($insight);
 
         $recordAudit->execute(
             request: $request,
@@ -121,36 +125,12 @@ class AdminWhatsappAgentController extends Controller
     public function ignore(
         Request $request,
         AgentInsight $insight,
+        IgnoreWhatsappAgentInsightAction $ignoreInsight,
         RecordWhatsappAgentAdminAuditAction $recordAudit,
-        RecordWhatsappAgentEventAction $recordEvent,
         WhatsappAgentInsightViewFactory $viewFactory,
     ): JsonResponse {
-        abort_if($insight->status !== 'active', 422, 'Somente insights ativos podem ser ignorados manualmente.');
-
         $before = $viewFactory->snapshot($insight);
-
-        $insight->forceFill([
-            'status' => 'ignored',
-            'ignored_at' => now(),
-        ])->save();
-
-        if ($insight->run !== null) {
-            $recordEvent->execute(
-                run: $insight->run,
-                insight: $insight,
-                eventName: 'whatsapp.agent.insight.ignored',
-                payload: [
-                    'insight_id' => $insight->id,
-                    'insight_type' => $insight->type,
-                    'ignore_reason' => 'manual_ignore',
-                ],
-                result: [
-                    'status' => 'ignored',
-                ],
-                idempotencyKey: sprintf('agent-insight-ignored-manual:%s', $insight->id),
-                occurredAt: now(),
-            );
-        }
+        $insight = $ignoreInsight->execute($insight);
 
         $recordAudit->execute(
             request: $request,
