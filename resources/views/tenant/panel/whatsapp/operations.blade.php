@@ -10,6 +10,7 @@
             ['label' => 'Health Window', 'description' => 'janela de saude consolidada por provider, calculada no backend operacional.'],
             ['label' => 'Smart Routing', 'description' => 'motivo da decisao operacional e caminho escolhido antes do dispatch.'],
             ['label' => 'Decision Source', 'description' => 'primary_default, health_based_secondary, fallback_pinned ou manual_override.'],
+            ['label' => 'Automacoes', 'description' => 'runs, skip reasons e mensagens enfileiradas agora aparecem no resumo e no feed operacional.'],
         ];
     @endphp
 
@@ -236,6 +237,8 @@
                         Tipo
                         <select data-control="feed-type" class="mt-1 w-full rounded-2xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm normal-case tracking-normal text-slate-900 outline-none transition focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100">
                             <option value="">Todos</option>
+                            <option value="automation_run_completed">automation_run_completed</option>
+                            <option value="automation_run_failed">automation_run_failed</option>
                             <option value="provider_fallback_scheduled">provider_fallback_scheduled</option>
                             <option value="provider_fallback_executed">provider_fallback_executed</option>
                             <option value="duplicate_prevented">duplicate_prevented</option>

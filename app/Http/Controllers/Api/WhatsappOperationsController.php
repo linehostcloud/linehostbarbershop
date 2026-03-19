@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Application\Actions\Communication\CalculateWhatsappProviderHealthAction;
+use App\Domain\Automation\Models\AutomationRun;
+use App\Domain\Automation\Models\AutomationRunTarget;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -75,6 +77,27 @@ class WhatsappOperationsController extends Controller
             $this->groupedCounts($boundaryQuery, 'code'),
             'code',
         );
+        $automationRunsQuery = AutomationRun::query()
+            ->where('channel', 'whatsapp')
+            ->whereBetween('started_at', [$window->startedAt, $window->endedAt]);
+        $automationTargetsQuery = AutomationRunTarget::query()
+            ->whereHas('run', fn (Builder $query): Builder => $query
+                ->where('channel', 'whatsapp')
+                ->whereBetween('started_at', [$window->startedAt, $window->endedAt]));
+
+        if ($providerFilter !== null) {
+            $automationRunsQuery->whereHas('targets.message', fn (Builder $query): Builder => $query->where('provider', $providerFilter));
+            $automationTargetsQuery->whereHas('message', fn (Builder $query): Builder => $query->where('provider', $providerFilter));
+        }
+
+        $automationTypeTotals = $this->countPairs(
+            $this->groupedCounts($automationRunsQuery, 'automation_type'),
+            'type',
+        );
+        $automationSkipReasonTotals = $this->countPairs(
+            $this->groupedCounts((clone $automationTargetsQuery)->whereNotNull('skip_reason'), 'skip_reason'),
+            'reason',
+        );
         $messageStatusMap = $this->pairsToMap($messageStatusTotals, 'status');
         $outboxStatusMap = $this->pairsToMap($outboxStatusTotals, 'status');
         $attemptStatusMap = $this->pairsToMap($attemptStatusTotals, 'status');
@@ -84,6 +107,10 @@ class WhatsappOperationsController extends Controller
         $operationalFailuresTotal = $this->sumBuckets($attemptStatusMap, ['failed', 'retry_scheduled', 'fallback_scheduled']);
         $pendingQueueTotal = $this->sumBuckets($outboxStatusMap, ['pending', 'processing', 'retry_scheduled']);
         $boundaryTotal = array_sum(array_column($boundaryCodeTotals, 'total'));
+        $automationRunsTotal = (clone $automationRunsQuery)->count();
+        $automationQueuedTotal = (clone $automationTargetsQuery)->where('status', 'queued')->count();
+        $automationSkippedTotal = (clone $automationTargetsQuery)->where('status', 'skipped')->count();
+        $automationFailedTotal = (clone $automationTargetsQuery)->where('status', 'failed')->count();
 
         return response()->json([
             'data' => [
@@ -98,9 +125,21 @@ class WhatsappOperationsController extends Controller
                     'fallback_executed_total' => (int) ($fallbackEventMetrics['totals']['executed'] ?? 0),
                     'duplicate_prevented_total' => (int) ($attemptStatusMap['duplicate_prevented'] ?? 0),
                     'duplicate_risk_total' => (int) ($duplicateEventMetrics['totals']['risk_detected'] ?? 0),
+                    'automation_runs_total' => $automationRunsTotal,
+                    'automation_messages_queued_total' => $automationQueuedTotal,
+                    'automation_skipped_total' => $automationSkippedTotal,
+                    'automation_failed_total' => $automationFailedTotal,
                     'boundary_rejections_total' => $boundaryTotal,
                     'pending_queue_total' => $pendingQueueTotal,
                     'operational_failure_rate' => $this->percentage($operationalFailuresTotal, $attemptTotal),
+                ],
+                'automations' => [
+                    'runs_total' => $automationRunsTotal,
+                    'messages_queued_total' => $automationQueuedTotal,
+                    'skipped_total' => $automationSkippedTotal,
+                    'failed_total' => $automationFailedTotal,
+                    'type_totals' => $automationTypeTotals,
+                    'skip_reason_totals' => $automationSkipReasonTotals,
                 ],
                 'messages' => [
                     'total' => array_sum(array_column($messageStatusTotals, 'total')),
@@ -498,6 +537,8 @@ class WhatsappOperationsController extends Controller
             'provider_fallback_executed',
             'duplicate_prevented',
             'duplicate_risk_detected',
+            'automation_run_completed',
+            'automation_run_failed',
         ])) {
             $query = EventLog::query()
                 ->with('message')
@@ -1004,6 +1045,8 @@ class WhatsappOperationsController extends Controller
             'provider_fallback_executed' => ['whatsapp.message.fallback.executed'],
             'duplicate_prevented' => ['whatsapp.message.duplicate_prevented'],
             'duplicate_risk_detected' => ['whatsapp.message.duplicate_risk_detected'],
+            'automation_run_completed' => ['whatsapp.automation.run.completed'],
+            'automation_run_failed' => ['whatsapp.automation.run.failed'],
             default => [
                 'outbox.event.reclaimed',
                 'outbox.event.reclaim.blocked',
@@ -1011,6 +1054,8 @@ class WhatsappOperationsController extends Controller
                 'whatsapp.message.fallback.executed',
                 'whatsapp.message.duplicate_prevented',
                 'whatsapp.message.duplicate_risk_detected',
+                'whatsapp.automation.run.completed',
+                'whatsapp.automation.run.failed',
             ],
         };
     }

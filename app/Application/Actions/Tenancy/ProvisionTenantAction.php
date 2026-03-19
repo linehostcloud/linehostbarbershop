@@ -2,6 +2,7 @@
 
 namespace App\Application\Actions\Tenancy;
 
+use App\Application\Actions\Automation\EnsureDefaultWhatsappAutomationsAction;
 use App\Application\DTOs\TenantProvisioningData;
 use App\Application\DTOs\TenantProvisioningResult;
 use App\Domain\Tenant\Models\Tenant;
@@ -21,6 +22,7 @@ class ProvisionTenantAction
     public function __construct(
         private readonly TenantDatabaseProvisioner $databaseProvisioner,
         private readonly TenantDatabaseManager $databaseManager,
+        private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaultWhatsappAutomations,
     ) {
     }
 
@@ -154,6 +156,8 @@ class ProvisionTenantAction
             if ($exitCode !== 0) {
                 throw new RuntimeException(trim(Artisan::output()) ?: 'Falha ao executar as migrations do tenant.');
             }
+
+            $this->ensureDefaultWhatsappAutomations->execute();
         } finally {
             $this->databaseManager->disconnect();
         }

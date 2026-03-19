@@ -1,5 +1,6 @@
 <?php
 
+use App\Application\Actions\Automation\ProcessWhatsappAutomationsAction;
 use App\Application\Actions\Observability\ReclaimStaleOutboxEventsAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
 use App\Application\DTOs\TenantProvisioningData;
@@ -13,6 +14,7 @@ use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Schema;
 
 Artisan::command('inspire', function () {
@@ -51,23 +53,23 @@ Artisan::command('tenancy:migrate-landlord {--fresh : Recria o banco landlord an
 })->purpose('Executa as migrations do banco landlord');
 
 Artisan::command('tenancy:migrate-tenant {tenant : Slug ou ULID do tenant} {--fresh : Recria o banco do tenant antes de migrar}', function (
-    string $tenantIdentifier,
+    string $tenant,
     TenantDatabaseManager $databaseManager,
 ) {
-    $tenant = Tenant::query()
-        ->where('id', $tenantIdentifier)
-        ->orWhere('slug', $tenantIdentifier)
+    $tenantModel = Tenant::query()
+        ->where('id', $tenant)
+        ->orWhere('slug', $tenant)
         ->first();
 
-    if ($tenant === null) {
-        $this->error(sprintf('Tenant "%s" nao encontrado.', $tenantIdentifier));
+    if ($tenantModel === null) {
+        $this->error(sprintf('Tenant "%s" nao encontrado.', $tenant));
 
         return self::FAILURE;
     }
 
     $migrationCommand = $this->option('fresh') ? 'migrate:fresh' : 'migrate';
 
-    $databaseManager->connect($tenant);
+    $databaseManager->connect($tenantModel);
 
     try {
         return $this->call($migrationCommand, [
@@ -351,6 +353,83 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
     return self::SUCCESS;
 })->purpose('Recupera com seguranca outbox events stale presos em processing sem reabrir dispatch incerto');
 
+Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou ULIDs de tenants especificos} {--type=* : Tipos especificos de automacao} {--limit=100 : Quantidade maxima de candidatos por automacao}', function (
+    TenantDatabaseManager $databaseManager,
+    ProcessWhatsappAutomationsAction $processWhatsappAutomations,
+) {
+    $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
+    $types = array_values(array_filter((array) $this->option('type'), 'is_string'));
+    $limit = max(1, (int) $this->option('limit'));
+
+    $tenants = Tenant::query()
+        ->when(
+            $tenantIdentifiers !== [],
+            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
+                $tenantQuery
+                    ->whereIn('id', $tenantIdentifiers)
+                    ->orWhereIn('slug', $tenantIdentifiers);
+            }),
+            fn ($query) => $query->where('status', 'active'),
+        )
+        ->orderBy('slug')
+        ->get();
+
+    if ($tenants->isEmpty()) {
+        $this->warn('Nenhum tenant encontrado para processamento de automacoes WhatsApp.');
+
+        return self::SUCCESS;
+    }
+
+    $totals = [
+        'automations' => 0,
+        'candidates' => 0,
+        'queued' => 0,
+        'skipped' => 0,
+        'failed' => 0,
+    ];
+
+    foreach ($tenants as $tenant) {
+        $databaseManager->connect($tenant);
+
+        try {
+            $summary = $processWhatsappAutomations->execute(
+                types: $types !== [] ? $types : null,
+                limit: $limit,
+            );
+
+            $totals['automations'] += $summary['processed_automations'];
+            $totals['candidates'] += $summary['candidates_found'];
+            $totals['queued'] += $summary['messages_queued'];
+            $totals['skipped'] += $summary['skipped_total'];
+            $totals['failed'] += $summary['failed_total'];
+
+            $this->line(sprintf(
+                '[%s] automations=%d candidates=%d queued=%d skipped=%d failed=%d',
+                $tenant->slug,
+                $summary['processed_automations'],
+                $summary['candidates_found'],
+                $summary['messages_queued'],
+                $summary['skipped_total'],
+                $summary['failed_total'],
+            ));
+        } finally {
+            $databaseManager->disconnect();
+        }
+    }
+
+    $this->newLine();
+    $this->info(sprintf(
+        'Totais automacoes: automations=%d candidates=%d queued=%d skipped=%d failed=%d',
+        $totals['automations'],
+        $totals['candidates'],
+        $totals['queued'],
+        $totals['skipped'],
+        $totals['failed'],
+    ));
+
+    return self::SUCCESS;
+})->purpose('Processa automacoes deterministicas de WhatsApp por tenant sem bypass do pipeline oficial');
+
 Artisan::command('tenancy:configure-whatsapp-provider
     {tenant : Slug ou ULID do tenant}
     {provider : Provider primario ou secundario}
@@ -515,3 +594,5 @@ Artisan::command('tenancy:whatsapp-healthcheck
 
     return $result->healthy ? self::SUCCESS : self::FAILURE;
 })->purpose('Executa health check do provider WhatsApp configurado para um tenant');
+
+Schedule::command('tenancy:process-whatsapp-automations')->everyFiveMinutes()->withoutOverlapping();

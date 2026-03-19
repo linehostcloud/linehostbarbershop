@@ -2,6 +2,7 @@
 
 namespace App\Application\Actions\Order;
 
+use App\Application\Actions\Automation\SyncClientLifecycleMetricsAction;
 use App\Application\Actions\Finance\SyncCashRegisterSessionBalanceAction;
 use App\Domain\Finance\Models\CashRegisterSession;
 use App\Domain\Order\Events\OrderClosed;
@@ -16,6 +17,7 @@ class CloseOrderAction
 {
     public function __construct(
         private readonly SyncCashRegisterSessionBalanceAction $syncCashRegisterSessionBalance,
+        private readonly SyncClientLifecycleMetricsAction $syncClientLifecycleMetrics,
     ) {}
 
     /**
@@ -96,9 +98,11 @@ class CloseOrderAction
                 if (($payload['mark_appointment_completed'] ?? true) && $order->appointment !== null) {
                     $order->appointment->forceFill([
                         'status' => 'completed',
-                        'completed_at' => now(),
+                        'completed_at' => $closedAt,
                     ])->save();
                 }
+
+                $this->syncClientLifecycleMetrics->execute($order->client, $closedAt);
 
                 return $order->fresh([
                     'client',

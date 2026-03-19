@@ -2,8 +2,11 @@
 
 namespace App\Domain\Automation\Models;
 
+use App\Domain\Communication\Models\Message;
+use App\Domain\Observability\Models\EventLog;
 use App\Infrastructure\Persistence\TenantModel;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Automation extends TenantModel
 {
@@ -38,5 +41,30 @@ class Automation extends TenantModel
             'stop_on_response' => 'boolean',
             'last_executed_at' => 'datetime',
         ];
+    }
+
+    public function messages(): HasMany
+    {
+        return $this->hasMany(Message::class);
+    }
+
+    public function eventLogs(): HasMany
+    {
+        return $this->hasMany(EventLog::class);
+    }
+
+    public function runs(): HasMany
+    {
+        return $this->hasMany(AutomationRun::class);
+    }
+
+    public function runTargets(): HasMany
+    {
+        return $this->hasMany(AutomationRunTarget::class);
+    }
+
+    public function isActive(): bool
+    {
+        return $this->status === 'active';
     }
 }

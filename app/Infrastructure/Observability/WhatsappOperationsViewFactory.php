@@ -141,6 +141,9 @@ class WhatsappOperationsViewFactory
                 'decision_reason' => data_get($outboxEvent->context_json, 'whatsapp_dispatch.decision_reason')
                     ?? data_get($message?->payload_json ?? [], 'decision_reason'),
                 'deduplication_key' => $message?->deduplication_key,
+                'automation_type' => data_get($message?->payload_json ?? [], 'automation.type'),
+                'automation_run_id' => data_get($message?->payload_json ?? [], 'automation.run_id'),
+                'automation_target_id' => data_get($message?->payload_json ?? [], 'automation.target_id'),
             ],
         ];
     }
@@ -182,6 +185,9 @@ class WhatsappOperationsViewFactory
                 'external_message_id' => $message->external_message_id,
                 'decision_reason' => data_get($message->payload_json, 'decision_reason'),
                 'deduplication_key' => $message->deduplication_key,
+                'automation_type' => data_get($message->payload_json, 'automation.type'),
+                'automation_run_id' => data_get($message->payload_json, 'automation.run_id'),
+                'automation_target_id' => data_get($message->payload_json, 'automation.target_id'),
             ],
         ];
     }
@@ -247,6 +253,10 @@ class WhatsappOperationsViewFactory
                 'duplicate_risk' => $duplicateRisk,
                 'planned_fallback' => $plannedFallback,
                 'active_fallback' => $activeFallback,
+                'automation_type' => data_get($attempt->request_payload_json, 'payload.automation.type')
+                    ?? data_get($message?->payload_json ?? [], 'automation.type'),
+                'automation_run_id' => data_get($message?->payload_json ?? [], 'automation.run_id'),
+                'automation_target_id' => data_get($message?->payload_json ?? [], 'automation.target_id'),
             ],
         ];
     }
@@ -311,6 +321,8 @@ class WhatsappOperationsViewFactory
             'whatsapp.message.fallback.executed' => 'provider_fallback_executed',
             'whatsapp.message.duplicate_prevented' => 'duplicate_prevented',
             'whatsapp.message.duplicate_risk_detected' => 'duplicate_risk_detected',
+            'whatsapp.automation.run.completed' => 'automation_run_completed',
+            'whatsapp.automation.run.failed' => 'automation_run_failed',
             default => 'outbox_reclaimed',
         };
         $provider = is_string(data_get($eventLog->context_json, 'provider')) && data_get($eventLog->context_json, 'provider') !== ''
@@ -344,6 +356,8 @@ class WhatsappOperationsViewFactory
                 'outbox.event.reclaim.blocked' => 'high',
                 'whatsapp.message.duplicate_risk_detected' => 'medium',
                 'whatsapp.message.fallback.executed' => 'medium',
+                'whatsapp.automation.run.failed' => 'high',
+                'whatsapp.automation.run.completed' => (int) data_get($eventLog->payload_json, 'failed_total', 0) > 0 ? 'medium' : 'info',
                 default => 'medium',
             },
             'occurred_at' => $eventLog->occurred_at?->toIso8601String(),
@@ -354,12 +368,27 @@ class WhatsappOperationsViewFactory
                 'whatsapp.message.fallback.executed' => 'Fallback controlado executado no provider secundario.',
                 'whatsapp.message.duplicate_prevented' => 'Envio duplicado bloqueado antes do dispatch efetivo.',
                 'whatsapp.message.duplicate_risk_detected' => 'Risco de duplicidade detectado apos erro transitório no provider.',
+                'whatsapp.automation.run.completed' => sprintf(
+                    'Automacao %s executada: %d candidatos, %d mensagens enfileiradas e %d skips.',
+                    (string) data_get($eventLog->payload_json, 'automation_type', 'whatsapp'),
+                    (int) data_get($eventLog->payload_json, 'candidates_found', 0),
+                    (int) data_get($eventLog->payload_json, 'messages_queued', 0),
+                    (int) data_get($eventLog->payload_json, 'skipped_total', 0),
+                ),
+                'whatsapp.automation.run.failed' => sprintf(
+                    'Automacao %s falhou durante o processamento.',
+                    (string) data_get($eventLog->payload_json, 'automation_type', 'whatsapp'),
+                ),
                 default => 'Outbox stale recolocado para retry.',
             },
             'details' => [
                 'event_name' => $eventLog->event_name,
                 'message_id' => $eventLog->message_id,
                 'aggregate_id' => $eventLog->aggregate_id,
+                'automation_id' => $eventLog->automation_id,
+                'automation_run_id' => data_get($eventLog->context_json, 'automation_run_id'),
+                'automation_type' => data_get($eventLog->payload_json, 'automation_type')
+                    ?? data_get($eventLog->context_json, 'automation_type'),
                 'provider' => $provider,
                 'slot' => $slot,
                 'reason' => $reason !== '' ? $reason : null,
@@ -369,6 +398,12 @@ class WhatsappOperationsViewFactory
                 'deduplication_key' => data_get($eventLog->payload_json, 'deduplication_key'),
                 'duplicate_prevented' => (bool) data_get($eventLog->payload_json, 'duplicate_prevented', false),
                 'duplicate_risk' => (bool) data_get($eventLog->payload_json, 'duplicate_risk_detected', false),
+                'candidates_found' => data_get($eventLog->payload_json, 'candidates_found'),
+                'messages_queued' => data_get($eventLog->payload_json, 'messages_queued'),
+                'skipped_total' => data_get($eventLog->payload_json, 'skipped_total'),
+                'failed_total' => data_get($eventLog->payload_json, 'failed_total'),
+                'skip_reasons' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'skip_reasons', [])),
+                'failed_reasons' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'failed_reasons', [])),
                 'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
                 'result' => $this->sanitizer->sanitize($eventLog->result_json ?? []),
             ],
@@ -451,6 +486,10 @@ class WhatsappOperationsViewFactory
                     ?? $message?->deduplication_key,
                 'duplicate_prevented' => (bool) data_get($attempt->response_payload_json, 'duplicate_prevented', false),
                 'duplicate_risk' => $duplicateRisk,
+                'automation_type' => data_get($attempt->request_payload_json, 'payload.automation.type')
+                    ?? data_get($message?->payload_json ?? [], 'automation.type'),
+                'automation_run_id' => data_get($message?->payload_json ?? [], 'automation.run_id'),
+                'automation_target_id' => data_get($message?->payload_json ?? [], 'automation.target_id'),
             ],
         ];
     }

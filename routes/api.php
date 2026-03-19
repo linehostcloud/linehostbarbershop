@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AppointmentController;
 use App\Http\Controllers\Api\AcceptTenantInvitationController;
 use App\Http\Controllers\Api\AdminWhatsappProviderController;
+use App\Http\Controllers\Api\AdminWhatsappAutomationController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\LogoutController;
 use App\Http\Controllers\Api\Auth\MeController;
@@ -149,6 +150,13 @@ Route::prefix('v1')->group(function (): void {
                 ->middleware('tenant.ability:whatsapp.providers.write');
             Route::post('/admin/whatsapp-providers/{slot}/healthcheck', [AdminWhatsappProviderController::class, 'healthcheck'])
                 ->middleware('tenant.ability:whatsapp.providers.healthcheck');
+
+            Route::get('/admin/whatsapp-automations', [AdminWhatsappAutomationController::class, 'index'])
+                ->middleware('tenant.ability:whatsapp.automations.read');
+            Route::get('/admin/whatsapp-automations/{type}', [AdminWhatsappAutomationController::class, 'show'])
+                ->middleware('tenant.ability:whatsapp.automations.read');
+            Route::patch('/admin/whatsapp-automations/{type}', [AdminWhatsappAutomationController::class, 'update'])
+                ->middleware('tenant.ability:whatsapp.automations.write');
 
             Route::get('/operations/whatsapp/summary', [WhatsappOperationsController::class, 'summary'])
                 ->middleware('tenant.ability:whatsapp.operations.read');

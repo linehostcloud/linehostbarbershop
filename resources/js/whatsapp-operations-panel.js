@@ -514,6 +514,29 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 rows: [],
             },
             {
+                title: 'Automacoes executadas',
+                value: cards.automation_runs_total || 0,
+                tone: Number(cards.automation_runs_total || 0) > 0 ? 'slate' : 'stone',
+                caption: 'Runs de automacao processados na janela.',
+                rows: summarizeRows(payload?.automations?.type_totals || [], 'type', 3),
+            },
+            {
+                title: 'Mensagens por automacao',
+                value: cards.automation_messages_queued_total || 0,
+                tone: Number(cards.automation_messages_queued_total || 0) > 0 ? 'slate' : 'stone',
+                caption: 'Mensagens enfileiradas pelo motor de automacao.',
+                rows: [],
+            },
+            {
+                title: 'Skips de automacao',
+                value: cards.automation_skipped_total || 0,
+                tone: Number(cards.automation_skipped_total || 0) > 0 ? 'amber' : 'emerald',
+                caption: Number(cards.automation_failed_total || 0) > 0
+                    ? `${cards.automation_failed_total || 0} falhas de automacao exigem revisao.`
+                    : 'Execucoes puladas por cooldown, elegibilidade ou contato.',
+                rows: summarizeRows(payload?.automations?.skip_reason_totals || [], 'reason', 3),
+            },
+            {
                 title: 'Boundary rejections',
                 value: cards.boundary_rejections_total || 0,
                 tone: Number(cards.boundary_rejections_total || 0) > 0 ? 'rose' : 'emerald',
@@ -1249,7 +1272,10 @@ function typeTone(type) {
         case 'duplicate_prevented':
         case 'provider_healthcheck':
         case 'provider_config_activated':
+        case 'automation_run_completed':
             return 'slate';
+        case 'automation_run_failed':
+            return 'rose';
         default:
             return 'stone';
     }
@@ -1420,6 +1446,18 @@ function feedReferenceBadges(item) {
         badgesList.push(badge(`aggregate ${shortReference(details.aggregate_id)}`, 'stone'));
     }
 
+    if (details.automation_run_id) {
+        badgesList.push(badge(`run ${shortReference(details.automation_run_id)}`, 'stone'));
+    }
+
+    if (details.automation_target_id) {
+        badgesList.push(badge(`target ${shortReference(details.automation_target_id)}`, 'stone'));
+    }
+
+    if (details.automation_type) {
+        badgesList.push(badge(`automacao ${details.automation_type}`, 'stone'));
+    }
+
     if (details.request_id) {
         badgesList.push(badge(`request ${shortReference(details.request_id)}`, 'stone'));
     }
@@ -1455,6 +1493,22 @@ function feedSecondaryLine(item) {
         notes.push(`motivo ${details.reason}`);
     }
 
+    if (details.candidates_found !== undefined && details.candidates_found !== null) {
+        notes.push(`candidatos ${details.candidates_found}`);
+    }
+
+    if (details.messages_queued !== undefined && details.messages_queued !== null) {
+        notes.push(`enfileiradas ${details.messages_queued}`);
+    }
+
+    if (details.skipped_total !== undefined && details.skipped_total !== null) {
+        notes.push(`skips ${details.skipped_total}`);
+    }
+
+    if (details.failed_total !== undefined && details.failed_total !== null) {
+        notes.push(`falhas ${details.failed_total}`);
+    }
+
     if (details.http_status) {
         notes.push(`HTTP ${details.http_status}`);
     }
@@ -1473,6 +1527,14 @@ function feedSecondaryLine(item) {
 
     if (details.deduplication_key) {
         notes.push(`dedup ${shortReference(details.deduplication_key)}`);
+    }
+
+    if (details.skip_reasons && typeof details.skip_reasons === 'object' && Object.keys(details.skip_reasons).length > 0) {
+        notes.push(`skips ${Object.entries(details.skip_reasons).slice(0, 2).map(([reason, total]) => `${reason}:${total}`).join(', ')}`);
+    }
+
+    if (details.failed_reasons && typeof details.failed_reasons === 'object' && Object.keys(details.failed_reasons).length > 0) {
+        notes.push(`falhas ${Object.entries(details.failed_reasons).slice(0, 2).map(([reason, total]) => `${shortText(reason, 24)}:${total}`).join(', ')}`);
     }
 
     if (Array.isArray(details.result)) {
