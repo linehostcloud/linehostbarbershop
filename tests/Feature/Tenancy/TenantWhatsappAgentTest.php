@@ -14,8 +14,10 @@ use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Integration\Models\IntegrationAttempt;
 use App\Domain\Observability\Models\EventLog;
 use App\Domain\Tenant\Models\Tenant;
+use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
@@ -246,6 +248,69 @@ class TenantWhatsappAgentTest extends TestCase
             $this->withTenantConnection($tenant, function (): void {
                 $this->assertSame(1, AgentInsight::query()->where('type', 'provider_health_alert')->count());
                 $this->assertSame(2, AgentRun::query()->count());
+            });
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_scheduler_executes_agent_without_duplicate_run_when_lock_is_active(): void
+    {
+        Carbon::setTestNow('2026-03-19 10:00:00');
+
+        try {
+            $tenant = $this->provisionTenant('barbearia-agent-lock', 'barbearia-agent-lock.test');
+
+            $this->createProviderConfig($tenant, [
+                'slot' => 'primary',
+                'provider' => 'fake',
+                'enabled' => true,
+            ]);
+
+            $messageId = $this->createMessage($tenant, [
+                'provider' => 'fake',
+                'status' => 'failed',
+                'payload_json' => ['provider_slot' => 'primary'],
+                'failed_at' => '2026-03-19 09:55:00',
+                'updated_at' => '2026-03-19 09:55:00',
+            ]);
+
+            $this->createIntegrationAttempt($tenant, [
+                'message_id' => $messageId,
+                'provider' => 'fake',
+                'status' => 'failed',
+                'normalized_status' => 'failed',
+                'normalized_error_code' => 'rate_limit',
+                'failure_reason' => 'Provider em rate limit.',
+                'failed_at' => '2026-03-19 09:55:00',
+                'created_at' => '2026-03-19 09:55:00',
+            ]);
+
+            $lockKey = $this->withTenantConnection($tenant, fn (): string => app(TenantExecutionLockManager::class)
+                ->lockKeyForCurrentTenantConnection('whatsapp_agent'));
+
+            $lock = Cache::lock($lockKey, 300);
+            $this->assertTrue($lock->get());
+
+            try {
+                $this->artisan('tenancy:run-whatsapp-agent', [
+                    '--tenant' => [$tenant->slug],
+                ])->assertExitCode(0);
+            } finally {
+                $lock->release();
+            }
+
+            $this->withTenantConnection($tenant, function (): void {
+                $this->assertSame(0, AgentRun::query()->count());
+                $this->assertSame(0, AgentInsight::query()->count());
+                $this->assertSame(1, EventLog::query()->where('event_name', 'whatsapp.agent.scheduler_run_started')->count());
+
+                $completed = EventLog::query()
+                    ->where('event_name', 'whatsapp.agent.scheduler_run_completed')
+                    ->sole();
+
+                $this->assertTrue((bool) data_get($completed->payload_json, 'skipped_due_to_lock'));
+                $this->assertSame('skipped_due_to_lock', data_get($completed->result_json, 'status'));
             });
         } finally {
             Carbon::setTestNow();

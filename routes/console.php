@@ -1,8 +1,10 @@
 <?php
 
-use App\Application\Actions\Agent\AnalyzeWhatsappOperationsAgentAction;
-use App\Application\Actions\Automation\ProcessWhatsappAutomationsAction;
+use App\Application\Actions\Agent\RunScheduledWhatsappAgentAction;
+use App\Application\Actions\Automation\RunScheduledWhatsappAutomationsAction;
 use App\Application\Actions\Observability\ReclaimStaleOutboxEventsAction;
+use App\Application\Actions\Observability\RunWhatsappOperationalHousekeepingAction;
+use App\Application\Actions\Tenancy\MigrateTenantSchemaAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
 use App\Application\DTOs\TenantProvisioningData;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -12,11 +14,34 @@ use App\Application\Actions\Observability\ProcessOutboxEventAction;
 use App\Infrastructure\Integration\Whatsapp\WhatsappProviderConfigValidator;
 use App\Infrastructure\Integration\Whatsapp\WhatsappProviderRegistry;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
+use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Schema;
+
+if (! function_exists('resolveTenantCommandTargets')) {
+    /**
+     * @param  list<string>  $tenantIdentifiers
+     * @return \Illuminate\Support\Collection<int, Tenant>
+     */
+    function resolveTenantCommandTargets(array $tenantIdentifiers)
+    {
+        return Tenant::query()
+            ->when(
+                $tenantIdentifiers !== [],
+                fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
+                    $tenantQuery
+                        ->whereIn('id', $tenantIdentifiers)
+                        ->orWhereIn('slug', $tenantIdentifiers);
+                }),
+                fn ($query) => $query->where('status', 'active'),
+            )
+            ->orderBy('slug')
+            ->get();
+    }
+}
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -55,7 +80,7 @@ Artisan::command('tenancy:migrate-landlord {--fresh : Recria o banco landlord an
 
 Artisan::command('tenancy:migrate-tenant {tenant : Slug ou ULID do tenant} {--fresh : Recria o banco do tenant antes de migrar}', function (
     string $tenant,
-    TenantDatabaseManager $databaseManager,
+    MigrateTenantSchemaAction $migrateTenantSchema,
 ) {
     $tenantModel = Tenant::query()
         ->where('id', $tenant)
@@ -68,20 +93,50 @@ Artisan::command('tenancy:migrate-tenant {tenant : Slug ou ULID do tenant} {--fr
         return self::FAILURE;
     }
 
-    $migrationCommand = $this->option('fresh') ? 'migrate:fresh' : 'migrate';
-
-    $databaseManager->connect($tenantModel);
-
     try {
-        return $this->call($migrationCommand, [
-            '--database' => 'tenant',
-            '--path' => 'database/migrations/tenant',
-            '--force' => true,
-        ]);
-    } finally {
-        $databaseManager->disconnect();
+        $migrateTenantSchema->execute($tenantModel, (bool) $this->option('fresh'));
+    } catch (Throwable $throwable) {
+        $this->error($throwable->getMessage());
+
+        return self::FAILURE;
     }
+
+    $this->info(sprintf('Migrations do tenant "%s" executadas com sucesso.', $tenantModel->slug));
+
+    return self::SUCCESS;
 })->purpose('Executa as migrations do banco do tenant informado');
+
+Artisan::command('tenancy:migrate-tenants {--tenant=* : Slugs ou ULIDs de tenants especificos} {--fresh : Recria os bancos dos tenants antes de migrar}', function (
+    MigrateTenantSchemaAction $migrateTenantSchema,
+) {
+    $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
+    $tenants = resolveTenantCommandTargets($tenantIdentifiers);
+
+    if ($tenants->isEmpty()) {
+        $this->warn('Nenhum tenant encontrado para migracao.');
+
+        return self::SUCCESS;
+    }
+
+    $success = 0;
+    $failed = 0;
+
+    foreach ($tenants as $tenant) {
+        try {
+            $migrateTenantSchema->execute($tenant, (bool) $this->option('fresh'));
+            $success++;
+            $this->line(sprintf('[%s] migrado com sucesso.', $tenant->slug));
+        } catch (Throwable $throwable) {
+            $failed++;
+            $this->error(sprintf('[%s] %s', $tenant->slug, $throwable->getMessage()));
+        }
+    }
+
+    $this->newLine();
+    $this->info(sprintf('Totais migrations: success=%d failed=%d', $success, $failed));
+
+    return $failed > 0 ? self::FAILURE : self::SUCCESS;
+})->purpose('Executa as migrations dos tenants existentes de forma consistente');
 
 Artisan::command('tenancy:provision-tenant
     {slug : Slug unico do tenant}
@@ -157,19 +212,7 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $limit = max(1, (int) $this->option('limit'));
     $autoRunReclaim = (bool) config('observability.outbox.reclaim.auto_run_on_process', true);
-
-    $tenants = Tenant::query()
-        ->when(
-            $tenantIdentifiers !== [],
-            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
-                $tenantQuery
-                    ->whereIn('id', $tenantIdentifiers)
-                    ->orWhereIn('slug', $tenantIdentifiers);
-            }),
-            fn ($query) => $query->where('status', 'active'),
-        )
-        ->orderBy('slug')
-        ->get();
+    $tenants = resolveTenantCommandTargets($tenantIdentifiers);
 
     if ($tenants->isEmpty()) {
         $this->warn('Nenhum tenant encontrado para processamento do outbox.');
@@ -279,22 +322,11 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
 Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de tenants especificos} {--limit=50 : Quantidade maxima de eventos stale por tenant}', function (
     TenantDatabaseManager $databaseManager,
     ReclaimStaleOutboxEventsAction $reclaimStaleOutboxEvents,
+    TenantExecutionLockManager $lockManager,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $limit = max(1, (int) $this->option('limit'));
-
-    $tenants = Tenant::query()
-        ->when(
-            $tenantIdentifiers !== [],
-            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
-                $tenantQuery
-                    ->whereIn('id', $tenantIdentifiers)
-                    ->orWhereIn('slug', $tenantIdentifiers);
-            }),
-            fn ($query) => $query->where('status', 'active'),
-        )
-        ->orderBy('slug')
-        ->get();
+    $tenants = resolveTenantCommandTargets($tenantIdentifiers);
 
     if ($tenants->isEmpty()) {
         $this->warn('Nenhum tenant encontrado para reclaim do outbox.');
@@ -310,36 +342,51 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
     ];
 
     foreach ($tenants as $tenant) {
-        $databaseManager->connect($tenant);
+        $lock = $lockManager->executeForTenant(
+            tenant: $tenant,
+            operation: 'whatsapp_reclaim_stale_outbox',
+            seconds: max(30, (int) config('communication.whatsapp.execution_locks.reclaim_seconds', 120)),
+            callback: function () use ($databaseManager, $reclaimStaleOutboxEvents, $limit, $tenant): array {
+                $databaseManager->connect($tenant);
 
-        try {
-            $summary = $reclaimStaleOutboxEvents->execute($limit);
+                try {
+                    return $reclaimStaleOutboxEvents->execute($limit);
+                } finally {
+                    $databaseManager->disconnect();
+                }
+            },
+        );
 
-            if (! $summary['enabled']) {
-                $this->warn(sprintf('[%s] reclaim automatico/manual esta desabilitado por configuracao.', $tenant->slug));
+        if (! $lock['acquired']) {
+            $this->warn(sprintf('[%s] reclaim ignorado por lock ativo (%s).', $tenant->slug, $lock['lock_key']));
 
-                continue;
-            }
-
-            $totals['reclaimed'] += $summary['reclaimed'];
-            $totals['reconciled'] += $summary['reconciled'];
-            $totals['failed'] += $summary['failed'];
-            $totals['skipped'] += $summary['skipped'];
-
-            $this->line(sprintf(
-                '[%s] reclaimed=%d reconciled=%d failed=%d skipped=%d threshold=%ds max_reclaims=%d backoff=%ds',
-                $tenant->slug,
-                $summary['reclaimed'],
-                $summary['reconciled'],
-                $summary['failed'],
-                $summary['skipped'],
-                $summary['stale_after_seconds'],
-                $summary['max_attempts'],
-                $summary['backoff_seconds'],
-            ));
-        } finally {
-            $databaseManager->disconnect();
+            continue;
         }
+
+        $summary = (array) $lock['result'];
+
+        if (! $summary['enabled']) {
+            $this->warn(sprintf('[%s] reclaim automatico/manual esta desabilitado por configuracao.', $tenant->slug));
+
+            continue;
+        }
+
+        $totals['reclaimed'] += $summary['reclaimed'];
+        $totals['reconciled'] += $summary['reconciled'];
+        $totals['failed'] += $summary['failed'];
+        $totals['skipped'] += $summary['skipped'];
+
+        $this->line(sprintf(
+            '[%s] reclaimed=%d reconciled=%d failed=%d skipped=%d threshold=%ds max_reclaims=%d backoff=%ds',
+            $tenant->slug,
+            $summary['reclaimed'],
+            $summary['reconciled'],
+            $summary['failed'],
+            $summary['skipped'],
+            $summary['stale_after_seconds'],
+            $summary['max_attempts'],
+            $summary['backoff_seconds'],
+        ));
     }
 
     $this->newLine();
@@ -356,24 +403,12 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
 
 Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou ULIDs de tenants especificos} {--type=* : Tipos especificos de automacao} {--limit=100 : Quantidade maxima de candidatos por automacao}', function (
     TenantDatabaseManager $databaseManager,
-    ProcessWhatsappAutomationsAction $processWhatsappAutomations,
+    RunScheduledWhatsappAutomationsAction $runScheduledWhatsappAutomations,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $types = array_values(array_filter((array) $this->option('type'), 'is_string'));
     $limit = max(1, (int) $this->option('limit'));
-
-    $tenants = Tenant::query()
-        ->when(
-            $tenantIdentifiers !== [],
-            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
-                $tenantQuery
-                    ->whereIn('id', $tenantIdentifiers)
-                    ->orWhereIn('slug', $tenantIdentifiers);
-            }),
-            fn ($query) => $query->where('status', 'active'),
-        )
-        ->orderBy('slug')
-        ->get();
+    $tenants = resolveTenantCommandTargets($tenantIdentifiers);
 
     if ($tenants->isEmpty()) {
         $this->warn('Nenhum tenant encontrado para processamento de automacoes WhatsApp.');
@@ -387,31 +422,32 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
         'queued' => 0,
         'skipped' => 0,
         'failed' => 0,
+        'locked' => 0,
     ];
 
     foreach ($tenants as $tenant) {
         $databaseManager->connect($tenant);
 
         try {
-            $summary = $processWhatsappAutomations->execute(
-                types: $types !== [] ? $types : null,
-                limit: $limit,
-            );
+            $summary = $runScheduledWhatsappAutomations->execute($tenant, $types !== [] ? $types : null, $limit);
 
             $totals['automations'] += $summary['processed_automations'];
             $totals['candidates'] += $summary['candidates_found'];
             $totals['queued'] += $summary['messages_queued'];
             $totals['skipped'] += $summary['skipped_total'];
             $totals['failed'] += $summary['failed_total'];
+            $totals['locked'] += (int) ($summary['skipped_due_to_lock'] ?? false);
 
             $this->line(sprintf(
-                '[%s] automations=%d candidates=%d queued=%d skipped=%d failed=%d',
+                '[%s] automations=%d candidates=%d queued=%d skipped=%d failed=%d scheduler=%s lock=%s',
                 $tenant->slug,
                 $summary['processed_automations'],
                 $summary['candidates_found'],
                 $summary['messages_queued'],
                 $summary['skipped_total'],
                 $summary['failed_total'],
+                $summary['scheduler_status'],
+                (bool) ($summary['skipped_due_to_lock'] ?? false) ? 'sim' : 'nao',
             ));
         } finally {
             $databaseManager->disconnect();
@@ -420,12 +456,13 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
 
     $this->newLine();
     $this->info(sprintf(
-        'Totais automacoes: automations=%d candidates=%d queued=%d skipped=%d failed=%d',
+        'Totais automacoes: automations=%d candidates=%d queued=%d skipped=%d failed=%d locked=%d',
         $totals['automations'],
         $totals['candidates'],
         $totals['queued'],
         $totals['skipped'],
         $totals['failed'],
+        $totals['locked'],
     ));
 
     return self::SUCCESS;
@@ -433,22 +470,10 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
 
 Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de tenants especificos}', function (
     TenantDatabaseManager $databaseManager,
-    AnalyzeWhatsappOperationsAgentAction $analyzeWhatsappOperationsAgent,
+    RunScheduledWhatsappAgentAction $runScheduledWhatsappAgent,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
-
-    $tenants = Tenant::query()
-        ->when(
-            $tenantIdentifiers !== [],
-            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
-                $tenantQuery
-                    ->whereIn('id', $tenantIdentifiers)
-                    ->orWhereIn('slug', $tenantIdentifiers);
-            }),
-            fn ($query) => $query->where('status', 'active'),
-        )
-        ->orderBy('slug')
-        ->get();
+    $tenants = resolveTenantCommandTargets($tenantIdentifiers);
 
     if ($tenants->isEmpty()) {
         $this->warn('Nenhum tenant encontrado para execucao do agente operacional de WhatsApp.');
@@ -463,13 +488,14 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
         'resolved' => 0,
         'ignored' => 0,
         'active' => 0,
+        'locked' => 0,
     ];
 
     foreach ($tenants as $tenant) {
         $databaseManager->connect($tenant);
 
         try {
-            $summary = $analyzeWhatsappOperationsAgent->execute();
+            $summary = $runScheduledWhatsappAgent->execute($tenant);
 
             $totals['runs']++;
             $totals['created'] += (int) $summary['insights_created'];
@@ -477,9 +503,10 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
             $totals['resolved'] += (int) $summary['insights_resolved'];
             $totals['ignored'] += (int) $summary['insights_ignored'];
             $totals['active'] += (int) $summary['active_insights_total'];
+            $totals['locked'] += (int) ($summary['skipped_due_to_lock'] ?? false);
 
             $this->line(sprintf(
-                '[%s] run=%s created=%d refreshed=%d resolved=%d ignored=%d active=%d',
+                '[%s] run=%s created=%d refreshed=%d resolved=%d ignored=%d active=%d scheduler=%s lock=%s',
                 $tenant->slug,
                 $summary['agent_run_id'],
                 $summary['insights_created'],
@@ -487,6 +514,8 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
                 $summary['insights_resolved'],
                 $summary['insights_ignored'],
                 $summary['active_insights_total'],
+                $summary['scheduler_status'],
+                (bool) ($summary['skipped_due_to_lock'] ?? false) ? 'sim' : 'nao',
             ));
         } finally {
             $databaseManager->disconnect();
@@ -495,17 +524,100 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
 
     $this->newLine();
     $this->info(sprintf(
-        'Totais agente: runs=%d created=%d refreshed=%d resolved=%d ignored=%d active=%d',
+        'Totais agente: runs=%d created=%d refreshed=%d resolved=%d ignored=%d active=%d locked=%d',
         $totals['runs'],
         $totals['created'],
         $totals['refreshed'],
         $totals['resolved'],
         $totals['ignored'],
         $totals['active'],
+        $totals['locked'],
     ));
 
     return self::SUCCESS;
 })->purpose('Analisa a operacao WhatsApp por tenant e gera insights auditaveis para o agente operacional');
+
+Artisan::command('tenancy:whatsapp-housekeeping {--tenant=* : Slugs ou ULIDs de tenants especificos} {--limit=200 : Quantidade maxima de registros por limpeza}', function (
+    TenantDatabaseManager $databaseManager,
+    RunWhatsappOperationalHousekeepingAction $runWhatsappOperationalHousekeeping,
+) {
+    $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
+    $limit = max(1, (int) $this->option('limit'));
+    $tenants = resolveTenantCommandTargets($tenantIdentifiers);
+
+    if ($tenants->isEmpty()) {
+        $this->warn('Nenhum tenant encontrado para housekeeping operacional do WhatsApp.');
+
+        return self::SUCCESS;
+    }
+
+    $totals = [
+        'reclaimed' => 0,
+        'reconciled' => 0,
+        'failed' => 0,
+        'pruned_outbox_events' => 0,
+        'pruned_automation_runs' => 0,
+        'pruned_agent_runs' => 0,
+        'pruned_agent_insights' => 0,
+        'pruned_event_logs' => 0,
+        'pruned_integration_attempts' => 0,
+        'locked' => 0,
+    ];
+
+    foreach ($tenants as $tenant) {
+        $databaseManager->connect($tenant);
+
+        try {
+            $summary = $runWhatsappOperationalHousekeeping->execute($tenant, $limit);
+
+            $totals['reclaimed'] += (int) data_get($summary, 'reclaim.reclaimed', 0);
+            $totals['reconciled'] += (int) data_get($summary, 'reclaim.reconciled', 0);
+            $totals['failed'] += (int) data_get($summary, 'reclaim.failed', 0);
+            $totals['pruned_outbox_events'] += (int) data_get($summary, 'pruned.outbox_events', 0);
+            $totals['pruned_automation_runs'] += (int) data_get($summary, 'pruned.automation_runs', 0);
+            $totals['pruned_agent_runs'] += (int) data_get($summary, 'pruned.agent_runs', 0);
+            $totals['pruned_agent_insights'] += (int) data_get($summary, 'pruned.agent_insights', 0);
+            $totals['pruned_event_logs'] += (int) data_get($summary, 'pruned.event_logs', 0);
+            $totals['pruned_integration_attempts'] += (int) data_get($summary, 'pruned.integration_attempts', 0);
+            $totals['locked'] += (int) ($summary['skipped_due_to_lock'] ?? false);
+
+            $this->line(sprintf(
+                '[%s] scheduler=%s reclaim=%d/%d failed=%d prune[outbox=%d runs=%d agent_runs=%d insights=%d logs=%d attempts=%d] lock=%s',
+                $tenant->slug,
+                $summary['scheduler_status'],
+                (int) data_get($summary, 'reclaim.reclaimed', 0),
+                (int) data_get($summary, 'reclaim.reconciled', 0),
+                (int) data_get($summary, 'reclaim.failed', 0),
+                (int) data_get($summary, 'pruned.outbox_events', 0),
+                (int) data_get($summary, 'pruned.automation_runs', 0),
+                (int) data_get($summary, 'pruned.agent_runs', 0),
+                (int) data_get($summary, 'pruned.agent_insights', 0),
+                (int) data_get($summary, 'pruned.event_logs', 0),
+                (int) data_get($summary, 'pruned.integration_attempts', 0),
+                (bool) ($summary['skipped_due_to_lock'] ?? false) ? 'sim' : 'nao',
+            ));
+        } finally {
+            $databaseManager->disconnect();
+        }
+    }
+
+    $this->newLine();
+    $this->info(sprintf(
+        'Totais housekeeping: reclaimed=%d reconciled=%d failed=%d outbox=%d automation_runs=%d agent_runs=%d insights=%d logs=%d attempts=%d locked=%d',
+        $totals['reclaimed'],
+        $totals['reconciled'],
+        $totals['failed'],
+        $totals['pruned_outbox_events'],
+        $totals['pruned_automation_runs'],
+        $totals['pruned_agent_runs'],
+        $totals['pruned_agent_insights'],
+        $totals['pruned_event_logs'],
+        $totals['pruned_integration_attempts'],
+        $totals['locked'],
+    ));
+
+    return self::SUCCESS;
+})->purpose('Executa reclaim e limpeza segura da observabilidade operacional do WhatsApp por tenant');
 
 Artisan::command('tenancy:configure-whatsapp-provider
     {tenant : Slug ou ULID do tenant}
@@ -672,5 +784,7 @@ Artisan::command('tenancy:whatsapp-healthcheck
     return $result->healthy ? self::SUCCESS : self::FAILURE;
 })->purpose('Executa health check do provider WhatsApp configurado para um tenant');
 
+Schedule::command('tenancy:process-outbox')->everyMinute()->withoutOverlapping();
 Schedule::command('tenancy:process-whatsapp-automations')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('tenancy:run-whatsapp-agent')->everyTenMinutes()->withoutOverlapping();
+Schedule::command('tenancy:whatsapp-housekeeping')->hourly()->withoutOverlapping();

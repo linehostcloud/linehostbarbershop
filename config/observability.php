@@ -22,4 +22,13 @@ return [
         'default_boundary_latest_limit' => (int) env('WHATSAPP_OPERATIONS_DEFAULT_BOUNDARY_LATEST_LIMIT', 10),
         'default_top_error_codes_limit' => (int) env('WHATSAPP_OPERATIONS_DEFAULT_TOP_ERROR_CODES_LIMIT', 5),
     ],
+    'whatsapp_housekeeping' => [
+        'default_batch_size' => (int) env('WHATSAPP_HOUSEKEEPING_DEFAULT_BATCH_SIZE', 200),
+        'automation_runs_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_AUTOMATION_RUNS_RETAIN_DAYS', 30),
+        'agent_runs_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_AGENT_RUNS_RETAIN_DAYS', 30),
+        'agent_insights_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_AGENT_INSIGHTS_RETAIN_DAYS', 45),
+        'event_logs_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_EVENT_LOGS_RETAIN_DAYS', 60),
+        'outbox_events_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_OUTBOX_EVENTS_RETAIN_DAYS', 30),
+        'integration_attempts_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_INTEGRATION_ATTEMPTS_RETAIN_DAYS', 45),
+    ],
 ];

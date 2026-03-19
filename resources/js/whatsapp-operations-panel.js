@@ -30,6 +30,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         lastUpdated: rootElement.querySelector('[data-last-updated]'),
         autoRefreshState: rootElement.querySelector('[data-auto-refresh-state]'),
         summary: rootElement.querySelector('[data-section="summary"]'),
+        schedulerRuns: rootElement.querySelector('[data-section="scheduler-runs"]'),
         agent: rootElement.querySelector('[data-section="agent"]'),
         providers: rootElement.querySelector('[data-section="providers"]'),
         attention: rootElement.querySelector('[data-section="attention"]'),
@@ -271,6 +272,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
     async function loadSummary() {
         renderLoading(elements.summary, 'Carregando indicadores operacionais...');
+        renderLoading(elements.schedulerRuns, 'Carregando estado do scheduler...');
 
         try {
             const response = await getJson(boot.urls.summary, compactParams({
@@ -282,6 +284,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             return response;
         } catch (error) {
             renderSectionError(elements.summary, friendlyError(error, 'Não foi possível carregar o resumo operacional.'), 'summary');
+            renderSectionError(elements.schedulerRuns, friendlyError(error, 'Não foi possível carregar o estado do scheduler.'), 'summary');
             throw error;
         }
     }
@@ -605,6 +608,22 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 </div>
             </article>
         `).join('');
+
+        renderSchedulerRuns(payload?.scheduler_runs || {});
+    }
+
+    function renderSchedulerRuns(runs) {
+        if (!elements.schedulerRuns) {
+            return;
+        }
+
+        const items = [
+            schedulerRunTile('Automações', runs?.automations),
+            schedulerRunTile('Agente', runs?.agent),
+            schedulerRunTile('Housekeeping', runs?.housekeeping),
+        ];
+
+        elements.schedulerRuns.innerHTML = items.join('');
     }
 
     function renderAgent(payload) {
@@ -769,6 +788,55 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 </article>
             `;
         }).join('');
+    }
+
+    function schedulerRunTile(label, run) {
+        if (!run) {
+            return `
+                <article class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">${e(label)}</p>
+                    <p class="mt-2 text-base font-semibold text-slate-950">Sem execução registrada</p>
+                    <p class="mt-2 text-sm text-slate-600">Ainda não houve evento recente de scheduler para esta rotina.</p>
+                </article>
+            `;
+        }
+
+        const tone = run.status === 'failed' ? 'rose' : (run.status === 'running' ? 'amber' : (run.skipped_due_to_lock ? 'stone' : 'emerald'));
+        const caption = run.error_message
+            ? run.error_message
+            : (run.skipped_due_to_lock
+                ? 'Execução ignorada porque outra rotina equivalente já estava ativa.'
+                : (run.completed_at
+                    ? `Última finalização em ${formatDateTime(run.completed_at)}`
+                    : `Iniciado em ${formatDateTime(run.started_at || run.occurred_at)}`));
+
+        const chips = [
+            badge(run.status || 'unknown', tone),
+        ];
+
+        if (run.duration_ms) {
+            chips.push(badge(`${formatDuration(run.duration_ms)}`, 'stone'));
+        }
+
+        if (run.lock_key && run.skipped_due_to_lock) {
+            chips.push(badge('lock ativo', 'stone'));
+        }
+
+        return `
+            <article class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">${e(label)}</p>
+                        <p class="mt-2 text-lg font-semibold text-slate-950">${e(statusLabel(run.status || 'unknown'))}</p>
+                    </div>
+                    <div class="flex flex-wrap justify-end gap-1.5">
+                        ${chips.join('')}
+                    </div>
+                </div>
+                <p class="mt-3 text-sm leading-6 text-slate-600">${e(caption)}</p>
+                <p class="mt-2 text-xs text-slate-500">Run ${e(run.scheduler_run_id || 'n/d')} · ${e(formatDateTime(run.occurred_at || run.started_at))}</p>
+            </article>
+        `;
     }
 
     function renderAttention(items) {
@@ -1277,6 +1345,21 @@ function providerStateLabel(label) {
     }
 }
 
+function statusLabel(status) {
+    switch (status) {
+        case 'running':
+            return 'em execução';
+        case 'completed':
+            return 'concluído';
+        case 'skipped_due_to_lock':
+            return 'aguardando lock';
+        case 'failed':
+            return 'falhou';
+        default:
+            return status || 'desconhecido';
+    }
+}
+
 function attentionRank(severity) {
     switch (severity) {
         case 'high':
@@ -1384,6 +1467,7 @@ function statusTone(status) {
         case 'processed':
         case 'delivered':
         case 'healthy':
+        case 'completed':
             return 'emerald';
         case 'failed':
         case 'unhealthy':
@@ -1392,11 +1476,13 @@ function statusTone(status) {
         case 'fallback_scheduled':
         case 'queued':
         case 'processing':
+        case 'running':
             return 'amber';
         case 'resolved':
         case 'executed':
             return 'emerald';
         case 'ignored':
+        case 'skipped_due_to_lock':
             return 'stone';
         default:
             return 'stone';
@@ -1442,12 +1528,21 @@ function typeTone(type) {
         case 'duplicate_prevented':
         case 'provider_healthcheck':
         case 'provider_config_activated':
+        case 'automation_scheduler_run_started':
+        case 'automation_scheduler_run_completed':
+        case 'agent_scheduler_run_started':
+        case 'agent_scheduler_run_completed':
+        case 'housekeeping_run_started':
+        case 'housekeeping_run_completed':
         case 'automation_run_completed':
         case 'agent_run_completed':
             return 'slate';
         case 'agent_recommendation_executed':
         case 'agent_insight_resolved':
             return 'emerald';
+        case 'automation_scheduler_run_failed':
+        case 'agent_scheduler_run_failed':
+        case 'housekeeping_run_failed':
         case 'automation_run_failed':
         case 'agent_run_failed':
             return 'rose';
@@ -1832,6 +1927,20 @@ function formatDateTime(value) {
         dateStyle: 'short',
         timeStyle: 'short',
     }).format(date);
+}
+
+function formatDuration(value) {
+    const numericValue = Number(value || 0);
+
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return '0 ms';
+    }
+
+    if (numericValue < 1000) {
+        return `${Math.round(numericValue)} ms`;
+    }
+
+    return `${(numericValue / 1000).toFixed(1)} s`;
 }
 
 function friendlyError(error, fallback) {

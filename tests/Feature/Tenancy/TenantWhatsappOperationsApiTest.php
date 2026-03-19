@@ -146,6 +146,78 @@ class TenantWhatsappOperationsApiTest extends TestCase
             ],
             'occurred_at' => '2026-03-19 08:36:00',
         ]);
+        $this->createEventLog($tenant, [
+            'aggregate_type' => 'scheduler_run',
+            'aggregate_id' => 'scheduler-automation-1',
+            'event_name' => 'whatsapp.automation.scheduler_run_completed',
+            'payload_json' => [
+                'tenant_id' => $tenant->id,
+                'tenant_slug' => $tenant->slug,
+                'started_at' => '2026-03-19T08:00:00-03:00',
+                'completed_at' => '2026-03-19T08:02:00-03:00',
+                'duration_ms' => 120000,
+                'processed_automations' => 2,
+                'candidates_found' => 5,
+                'messages_queued' => 3,
+            ],
+            'context_json' => [
+                'channel' => 'whatsapp',
+                'scheduler_type' => 'automations',
+                'scheduler_run_id' => 'scheduler-automation-1',
+            ],
+            'result_json' => [
+                'status' => 'completed',
+            ],
+            'occurred_at' => '2026-03-19 08:55:00',
+        ]);
+        $this->createEventLog($tenant, [
+            'aggregate_type' => 'scheduler_run',
+            'aggregate_id' => 'scheduler-agent-1',
+            'event_name' => 'whatsapp.agent.scheduler_run_failed',
+            'payload_json' => [
+                'tenant_id' => $tenant->id,
+                'tenant_slug' => $tenant->slug,
+                'started_at' => '2026-03-19T08:10:00-03:00',
+                'failed_at' => '2026-03-19T08:11:00-03:00',
+                'duration_ms' => 60000,
+                'error_message' => 'Falha de teste do agente.',
+            ],
+            'context_json' => [
+                'channel' => 'whatsapp',
+                'scheduler_type' => 'agent',
+                'scheduler_run_id' => 'scheduler-agent-1',
+            ],
+            'result_json' => [
+                'status' => 'failed',
+            ],
+            'occurred_at' => '2026-03-19 08:56:00',
+        ]);
+        $this->createEventLog($tenant, [
+            'aggregate_type' => 'scheduler_run',
+            'aggregate_id' => 'scheduler-housekeeping-1',
+            'event_name' => 'whatsapp.housekeeping.run_completed',
+            'payload_json' => [
+                'tenant_id' => $tenant->id,
+                'tenant_slug' => $tenant->slug,
+                'started_at' => '2026-03-19T08:20:00-03:00',
+                'completed_at' => '2026-03-19T08:21:00-03:00',
+                'duration_ms' => 60000,
+                'pruned' => [
+                    'outbox_events' => 2,
+                    'event_logs' => 4,
+                    'integration_attempts' => 3,
+                ],
+            ],
+            'context_json' => [
+                'channel' => 'whatsapp',
+                'scheduler_type' => 'housekeeping',
+                'scheduler_run_id' => 'scheduler-housekeeping-1',
+            ],
+            'result_json' => [
+                'status' => 'completed',
+            ],
+            'occurred_at' => '2026-03-19 08:57:00',
+        ]);
 
         $response = $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'))
             ->getJson($this->tenantUrl($tenant, '/operations/whatsapp/summary', [
@@ -189,6 +261,12 @@ class TenantWhatsappOperationsApiTest extends TestCase
         $this->assertSame(2, data_get($data, 'operational_cards.boundary_rejections_total'));
         $this->assertSame(0, data_get($data, 'operational_cards.pending_queue_total'));
         $this->assertSame(33.33, (float) data_get($data, 'operational_cards.operational_failure_rate'));
+        $this->assertSame('completed', data_get($data, 'scheduler_runs.automations.status'));
+        $this->assertSame(120000, data_get($data, 'scheduler_runs.automations.duration_ms'));
+        $this->assertSame('failed', data_get($data, 'scheduler_runs.agent.status'));
+        $this->assertSame('Falha de teste do agente.', data_get($data, 'scheduler_runs.agent.error_message'));
+        $this->assertSame('completed', data_get($data, 'scheduler_runs.housekeeping.status'));
+        $this->assertSame(2, data_get($data, 'scheduler_runs.housekeeping.payload.pruned.outbox_events'));
         $this->assertStringNotContainsString('summary-secret-token', $response->getContent());
     }
 

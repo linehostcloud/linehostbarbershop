@@ -51,6 +51,13 @@ return [
             'automation_stale_days' => (int) env('WHATSAPP_AGENT_AUTOMATION_STALE_DAYS', 7),
             'ignored_reopen_hours' => (int) env('WHATSAPP_AGENT_IGNORED_REOPEN_HOURS', 24),
         ],
+        'execution_locks' => [
+            'automations_seconds' => (int) env('WHATSAPP_AUTOMATIONS_LOCK_SECONDS', 300),
+            'agent_seconds' => (int) env('WHATSAPP_AGENT_LOCK_SECONDS', 300),
+            'outbox_seconds' => (int) env('WHATSAPP_OUTBOX_LOCK_SECONDS', 120),
+            'reclaim_seconds' => (int) env('WHATSAPP_RECLAIM_LOCK_SECONDS', 120),
+            'housekeeping_seconds' => (int) env('WHATSAPP_HOUSEKEEPING_LOCK_SECONDS', 600),
+        ],
         'testing_providers' => [
             'fake',
             'fake-transient-failure',

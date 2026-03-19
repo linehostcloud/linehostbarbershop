@@ -223,6 +223,57 @@ Health check do provider ativo:
 docker compose run --rm app php artisan tenancy:whatsapp-healthcheck barbearia-demo --slot=primary
 ```
 
+## Runbook operacional do WhatsApp
+
+Comandos principais:
+
+```bash
+# subir landlord + tenants ja existentes
+docker compose run --rm app php artisan tenancy:migrate-landlord
+docker compose run --rm app php artisan tenancy:migrate-tenants
+
+# migrar apenas um tenant existente
+docker compose run --rm app php artisan tenancy:migrate-tenant barbearia-demo
+
+# scheduler manual
+docker compose run --rm app php artisan schedule:run
+
+# processar pipeline/outbox
+docker compose run --rm app php artisan tenancy:process-outbox --tenant=barbearia-demo --limit=50
+
+# rodar automacoes manualmente
+docker compose run --rm app php artisan tenancy:process-whatsapp-automations --tenant=barbearia-demo --limit=100
+
+# rodar agente manualmente
+docker compose run --rm app php artisan tenancy:run-whatsapp-agent --tenant=barbearia-demo
+
+# rodar housekeeping manualmente
+docker compose run --rm app php artisan tenancy:whatsapp-housekeeping --tenant=barbearia-demo --limit=200
+```
+
+Agendamento recorrente:
+
+- `tenancy:process-outbox`: a cada minuto
+- `tenancy:process-whatsapp-automations`: a cada 5 minutos
+- `tenancy:run-whatsapp-agent`: a cada 10 minutos
+- `tenancy:whatsapp-housekeeping`: a cada hora
+
+Problemas comuns:
+
+- filas travadas / outbox preso:
+  - rode `tenancy:process-outbox`
+  - se houver muitos itens em `processing`, rode `tenancy:reclaim-stale-outbox` ou `tenancy:whatsapp-housekeeping`
+- tenant antigo sem tabelas novas:
+  - rode `tenancy:migrate-tenants`
+  - para um tenant especifico, `tenancy:migrate-tenant <slug>`
+- provider instavel:
+  - verifique o painel operacional em `Saude por Provider`
+  - rode `tenancy:whatsapp-healthcheck <tenant> --slot=primary`
+  - veja insights do agente e fallbacks recentes no feed
+- duplicidade / retry excessivo:
+  - revise `duplicate_risk`, `duplicate_prevented`, `retry_scheduled` e `fallback_scheduled` no painel
+  - confira o feed operacional e os `integration_attempts`
+
 Esse comando:
 
 - conecta no banco de cada tenant informado

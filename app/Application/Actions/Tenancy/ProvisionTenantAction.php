@@ -2,14 +2,11 @@
 
 namespace App\Application\Actions\Tenancy;
 
-use App\Application\Actions\Automation\EnsureDefaultWhatsappAutomationsAction;
 use App\Application\DTOs\TenantProvisioningData;
 use App\Application\DTOs\TenantProvisioningResult;
 use App\Domain\Tenant\Models\Tenant;
-use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Infrastructure\Tenancy\TenantDatabaseProvisioner;
 use App\Models\User;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -21,8 +18,7 @@ class ProvisionTenantAction
 {
     public function __construct(
         private readonly TenantDatabaseProvisioner $databaseProvisioner,
-        private readonly TenantDatabaseManager $databaseManager,
-        private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaultWhatsappAutomations,
+        private readonly MigrateTenantSchemaAction $migrateTenantSchema,
     ) {
     }
 
@@ -111,7 +107,7 @@ class ProvisionTenantAction
                         );
                     }
 
-                    $this->runTenantMigrations($tenant);
+                    $this->migrateTenantSchema->execute($tenant);
 
                     return new TenantProvisioningResult(
                         tenant: $tenant->fresh(['domains', 'memberships']),
@@ -140,26 +136,5 @@ class ProvisionTenantAction
         }
 
         return Crypt::encryptString((string) $password);
-    }
-
-    private function runTenantMigrations(Tenant $tenant): void
-    {
-        $this->databaseManager->connect($tenant);
-
-        try {
-            $exitCode = Artisan::call('migrate', [
-                '--database' => 'tenant',
-                '--path' => 'database/migrations/tenant',
-                '--force' => true,
-            ]);
-
-            if ($exitCode !== 0) {
-                throw new RuntimeException(trim(Artisan::output()) ?: 'Falha ao executar as migrations do tenant.');
-            }
-
-            $this->ensureDefaultWhatsappAutomations->execute();
-        } finally {
-            $this->databaseManager->disconnect();
-        }
     }
 }

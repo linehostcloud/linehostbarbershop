@@ -56,6 +56,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('Mensageria WhatsApp')
             ->assertSee('Governança')
             ->assertSee('Resumo Operacional')
+            ->assertSee('Execução Recorrente')
             ->assertSee('Agente Operacional')
             ->assertSee('Saúde por Provider')
             ->assertSee('Camada Determinística')
@@ -144,6 +145,11 @@ class TenantWhatsappOperationsPanelTest extends TestCase
                         'duplicate_risk_total',
                         'boundary_rejections_total',
                         'pending_queue_total',
+                    ],
+                    'scheduler_runs' => [
+                        'automations',
+                        'agent',
+                        'housekeeping',
                     ],
                 ],
             ]);

@@ -27,6 +27,7 @@ class WhatsappOperationsController extends Controller
     public function summary(
         WhatsappOperationalQueryRequest $request,
         TenantContext $tenantContext,
+        WhatsappOperationsViewFactory $viewFactory,
     ): JsonResponse {
         $tenantId = $this->currentTenantId($tenantContext);
         $window = $request->window();
@@ -165,6 +166,11 @@ class WhatsappOperationsController extends Controller
                         'started_at' => $latestAgentRun->started_at?->toIso8601String(),
                         'completed_at' => $latestAgentRun->completed_at?->toIso8601String(),
                     ] : null,
+                ],
+                'scheduler_runs' => [
+                    'automations' => $viewFactory->schedulerRunSummary($this->latestSchedulerEvent('automations')),
+                    'agent' => $viewFactory->schedulerRunSummary($this->latestSchedulerEvent('agent')),
+                    'housekeeping' => $viewFactory->schedulerRunSummary($this->latestSchedulerEvent('housekeeping')),
                 ],
                 'automations' => [
                     'runs_total' => $automationRunsTotal,
@@ -1164,6 +1170,15 @@ class WhatsappOperationsController extends Controller
     private function feedEventNames(WhatsappOperationalQueryRequest $request): array
     {
         return match ((string) $request->string('type')) {
+            'automation_scheduler_run_started' => ['whatsapp.automation.scheduler_run_started'],
+            'automation_scheduler_run_completed' => ['whatsapp.automation.scheduler_run_completed'],
+            'automation_scheduler_run_failed' => ['whatsapp.automation.scheduler_run_failed'],
+            'agent_scheduler_run_started' => ['whatsapp.agent.scheduler_run_started'],
+            'agent_scheduler_run_completed' => ['whatsapp.agent.scheduler_run_completed'],
+            'agent_scheduler_run_failed' => ['whatsapp.agent.scheduler_run_failed'],
+            'housekeeping_run_started' => ['whatsapp.housekeeping.run_started'],
+            'housekeeping_run_completed' => ['whatsapp.housekeeping.run_completed'],
+            'housekeeping_run_failed' => ['whatsapp.housekeeping.run_failed'],
             'outbox_reclaimed' => ['outbox.event.reclaimed'],
             'manual_review_required' => ['outbox.event.reclaim.blocked'],
             'provider_fallback_scheduled' => ['whatsapp.message.fallback.scheduled'],
@@ -1179,6 +1194,15 @@ class WhatsappOperationsController extends Controller
             'agent_insight_ignored' => ['whatsapp.agent.insight.ignored'],
             'agent_recommendation_executed' => ['whatsapp.agent.recommendation.executed'],
             default => [
+                'whatsapp.automation.scheduler_run_started',
+                'whatsapp.automation.scheduler_run_completed',
+                'whatsapp.automation.scheduler_run_failed',
+                'whatsapp.agent.scheduler_run_started',
+                'whatsapp.agent.scheduler_run_completed',
+                'whatsapp.agent.scheduler_run_failed',
+                'whatsapp.housekeeping.run_started',
+                'whatsapp.housekeeping.run_completed',
+                'whatsapp.housekeeping.run_failed',
                 'outbox.event.reclaimed',
                 'outbox.event.reclaim.blocked',
                 'whatsapp.message.fallback.scheduled',
@@ -1194,6 +1218,39 @@ class WhatsappOperationsController extends Controller
                 'whatsapp.agent.insight.ignored',
                 'whatsapp.agent.recommendation.executed',
             ],
+        };
+    }
+
+    private function latestSchedulerEvent(string $schedulerType): ?EventLog
+    {
+        return EventLog::query()
+            ->whereIn('event_name', $this->schedulerEventNames($schedulerType))
+            ->latest('occurred_at')
+            ->first();
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function schedulerEventNames(string $schedulerType): array
+    {
+        return match ($schedulerType) {
+            'automations' => [
+                'whatsapp.automation.scheduler_run_started',
+                'whatsapp.automation.scheduler_run_completed',
+                'whatsapp.automation.scheduler_run_failed',
+            ],
+            'agent' => [
+                'whatsapp.agent.scheduler_run_started',
+                'whatsapp.agent.scheduler_run_completed',
+                'whatsapp.agent.scheduler_run_failed',
+            ],
+            'housekeeping' => [
+                'whatsapp.housekeeping.run_started',
+                'whatsapp.housekeeping.run_completed',
+                'whatsapp.housekeeping.run_failed',
+            ],
+            default => [],
         };
     }
 

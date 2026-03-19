@@ -13,8 +13,10 @@ use App\Domain\Integration\Models\IntegrationAttempt;
 use App\Domain\Observability\Models\EventLog;
 use App\Domain\Observability\Models\OutboxEvent;
 use App\Domain\Tenant\Models\Tenant;
+use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
@@ -190,6 +192,107 @@ class TenantWhatsappAutomationEngineTest extends TestCase
 
                 $this->assertSame('reminder_already_sent', $skippedTarget->skip_reason);
                 $this->assertSame($appointmentId, $skippedTarget->target_id);
+            });
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_scheduler_executes_automations_without_duplicate_run_when_lock_is_active(): void
+    {
+        Carbon::setTestNow('2026-03-19 10:00:00');
+
+        try {
+            $tenant = $this->provisionTenant(
+                slug: 'barbearia-automation-lock',
+                domain: 'barbearia-automation-lock.test',
+            );
+            $headers = $this->tenantAuthHeaders($tenant, role: 'manager');
+            $this->withHeaders($headers);
+
+            $this->activateAutomation($tenant, 'appointment_reminder', [
+                'conditions_json' => [
+                    'lead_time_minutes' => 180,
+                    'selection_tolerance_minutes' => 15,
+                    'excluded_statuses' => ['canceled', 'no_show', 'completed'],
+                ],
+            ]);
+
+            [$clientId, $professionalId, $serviceId] = $this->createOperationalContext($tenant);
+            $this->createAppointment($tenant, $clientId, $professionalId, $serviceId, '2026-03-19 13:00:00');
+
+            $lockKey = $this->withTenantConnection($tenant, fn (): string => app(TenantExecutionLockManager::class)
+                ->lockKeyForCurrentTenantConnection('whatsapp_automations'));
+
+            $lock = Cache::lock($lockKey, 300);
+            $this->assertTrue($lock->get());
+
+            try {
+                $this->artisan('tenancy:process-whatsapp-automations', [
+                    '--tenant' => [$tenant->slug],
+                    '--limit' => 10,
+                ])->assertExitCode(0);
+            } finally {
+                $lock->release();
+            }
+
+            $this->withTenantConnection($tenant, function (): void {
+                $this->assertSame(0, AutomationRun::query()->count());
+                $this->assertSame(1, EventLog::query()->where('event_name', 'whatsapp.automation.scheduler_run_started')->count());
+
+                $completed = EventLog::query()
+                    ->where('event_name', 'whatsapp.automation.scheduler_run_completed')
+                    ->sole();
+
+                $this->assertTrue((bool) data_get($completed->payload_json, 'skipped_due_to_lock'));
+                $this->assertSame('skipped_due_to_lock', data_get($completed->result_json, 'status'));
+            });
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_whatsapp_automation_command_can_target_specific_tenant(): void
+    {
+        Carbon::setTestNow('2026-03-19 10:00:00');
+
+        try {
+            $firstTenant = $this->provisionTenant(
+                slug: 'barbearia-automation-first',
+                domain: 'barbearia-automation-first.test',
+            );
+            $secondTenant = $this->provisionTenant(
+                slug: 'barbearia-automation-second',
+                domain: 'barbearia-automation-second.test',
+            );
+
+            foreach ([$firstTenant, $secondTenant] as $tenant) {
+                $headers = $this->tenantAuthHeaders($tenant, role: 'manager');
+                $this->withHeaders($headers);
+                $this->activateAutomation($tenant, 'appointment_reminder', [
+                    'conditions_json' => [
+                        'lead_time_minutes' => 180,
+                        'selection_tolerance_minutes' => 15,
+                        'excluded_statuses' => ['canceled', 'no_show', 'completed'],
+                    ],
+                ]);
+
+                [$clientId, $professionalId, $serviceId] = $this->createOperationalContext($tenant);
+                $this->createAppointment($tenant, $clientId, $professionalId, $serviceId, '2026-03-19 13:00:00');
+            }
+
+            $this->artisan('tenancy:process-whatsapp-automations', [
+                '--tenant' => [$firstTenant->slug],
+                '--limit' => 10,
+            ])->assertExitCode(0);
+
+            $this->withTenantConnection($firstTenant, function (): void {
+                $this->assertSame(1, AutomationRun::query()->count());
+            });
+
+            $this->withTenantConnection($secondTenant, function (): void {
+                $this->assertSame(0, AutomationRun::query()->count());
+                $this->assertSame(0, Message::query()->count());
             });
         } finally {
             Carbon::setTestNow();

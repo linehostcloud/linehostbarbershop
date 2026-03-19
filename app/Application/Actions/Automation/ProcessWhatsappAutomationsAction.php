@@ -10,6 +10,7 @@ use App\Domain\Automation\Models\AutomationRunTarget;
 use App\Domain\Client\Models\Client;
 use App\Domain\Communication\Models\Message;
 use App\Application\Actions\Communication\QueueWhatsappMessageAction;
+use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 use Throwable;
@@ -22,7 +23,43 @@ class ProcessWhatsappAutomationsAction
         private readonly QueueWhatsappMessageAction $queueWhatsappMessage,
         private readonly RenderWhatsappAutomationMessageAction $renderMessage,
         private readonly RecordWhatsappAutomationEventAction $recordEvent,
+        private readonly TenantExecutionLockManager $lockManager,
     ) {
+    }
+
+    /**
+     * @param  list<string>|null  $types
+     * @return array{
+     *     processed_automations:int,
+     *     candidates_found:int,
+     *     messages_queued:int,
+     *     skipped_total:int,
+     *     failed_total:int,
+     *     runs:list<array<string, mixed>>
+     *     skipped_due_to_lock:bool,
+     *     lock_key:string
+     * }
+     */
+    public function execute(?array $types = null, ?int $limit = null): array
+    {
+        $lockTtlSeconds = max(30, (int) config('communication.whatsapp.execution_locks.automations_seconds', 300));
+        $lock = $this->lockManager->executeForCurrentTenantConnection(
+            operation: 'whatsapp_automations',
+            seconds: $lockTtlSeconds,
+            callback: fn (): array => $this->executeUnlocked($types, $limit),
+        );
+
+        if (! $lock['acquired']) {
+            return array_merge($this->emptyOverallSummary(), [
+                'skipped_due_to_lock' => true,
+                'lock_key' => $lock['lock_key'],
+            ]);
+        }
+
+        return array_merge((array) $lock['result'], [
+            'skipped_due_to_lock' => false,
+            'lock_key' => $lock['lock_key'],
+        ]);
     }
 
     /**
@@ -36,7 +73,7 @@ class ProcessWhatsappAutomationsAction
      *     runs:list<array<string, mixed>>
      * }
      */
-    public function execute(?array $types = null, ?int $limit = null): array
+    private function executeUnlocked(?array $types = null, ?int $limit = null): array
     {
         $supportedTypes = $this->supportedTypes($types);
         $limit ??= max(1, (int) config('communication.whatsapp.automations.default_processing_limit', 100));
@@ -50,14 +87,7 @@ class ProcessWhatsappAutomationsAction
             ->orderBy('trigger_event')
             ->get();
 
-        $summary = [
-            'processed_automations' => 0,
-            'candidates_found' => 0,
-            'messages_queued' => 0,
-            'skipped_total' => 0,
-            'failed_total' => 0,
-            'runs' => [],
-        ];
+        $summary = $this->emptyOverallSummary();
 
         foreach ($automations as $automation) {
             $runSummary = $this->processAutomation($automation, $limit);
@@ -71,6 +101,28 @@ class ProcessWhatsappAutomationsAction
         }
 
         return $summary;
+    }
+
+    /**
+     * @return array{
+     *     processed_automations:int,
+     *     candidates_found:int,
+     *     messages_queued:int,
+     *     skipped_total:int,
+     *     failed_total:int,
+     *     runs:list<array<string, mixed>>
+     * }
+     */
+    private function emptyOverallSummary(): array
+    {
+        return [
+            'processed_automations' => 0,
+            'candidates_found' => 0,
+            'messages_queued' => 0,
+            'skipped_total' => 0,
+            'failed_total' => 0,
+            'runs' => [],
+        ];
     }
 
     /**

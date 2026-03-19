@@ -10,6 +10,8 @@ use Illuminate\Support\Str;
 
 trait RefreshTenantDatabases
 {
+    protected string $testDatabaseDirectory;
+
     protected string $landlordDatabasePath;
 
     /**
@@ -19,7 +21,16 @@ trait RefreshTenantDatabases
 
     protected function setUpRefreshTenantDatabases(): void
     {
-        $this->landlordDatabasePath = database_path('landlord_test.sqlite');
+        $this->testDatabaseDirectory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+            .DIRECTORY_SEPARATOR
+            .'sistema-barbearia-tests-'
+            .Str::lower(Str::random(12));
+
+        if (! is_dir($this->testDatabaseDirectory)) {
+            mkdir($this->testDatabaseDirectory, 0777, true);
+        }
+
+        $this->landlordDatabasePath = $this->testDatabaseDirectory.DIRECTORY_SEPARATOR.'landlord_test.sqlite';
 
         $this->recreateSqliteDatabase($this->landlordDatabasePath);
 
@@ -36,7 +47,7 @@ trait RefreshTenantDatabases
             config('database.connections.tenant'),
             [
                 'driver' => 'sqlite',
-                'database' => database_path('tenant_test.sqlite'),
+                'database' => $this->testDatabaseDirectory.DIRECTORY_SEPARATOR.'tenant_test.sqlite',
                 'foreign_key_constraints' => true,
             ],
         ));
@@ -60,6 +71,8 @@ trait RefreshTenantDatabases
             foreach ($this->tenantDatabasePaths as $path) {
                 $this->deleteDatabaseFile($path);
             }
+
+            $this->deleteTestDatabaseDirectory();
         });
     }
 
@@ -80,7 +93,7 @@ trait RefreshTenantDatabases
             'currency' => 'BRL',
             'status' => 'active',
             'onboarding_stage' => 'completed',
-            'database_name' => $databaseFilename,
+            'database_name' => $databasePath,
             'database_host' => null,
             'database_port' => null,
             'database_username' => null,
@@ -176,7 +189,7 @@ trait RefreshTenantDatabases
 
     protected function trackTenantDatabase(string $databaseFilename): string
     {
-        $databasePath = database_path($databaseFilename);
+        $databasePath = $this->testDatabaseDirectory.DIRECTORY_SEPARATOR.$databaseFilename;
         $this->tenantDatabasePaths[] = $databasePath;
 
         return $databasePath;
@@ -187,6 +200,8 @@ trait RefreshTenantDatabases
         $this->deleteDatabaseFile($path);
 
         touch($path);
+        chmod($path, 0666);
+        clearstatcache(true, $path);
     }
 
     private function deleteDatabaseFile(string $path): void
@@ -194,5 +209,38 @@ trait RefreshTenantDatabases
         if (is_file($path)) {
             unlink($path);
         }
+
+        foreach (['-wal', '-shm', '-journal'] as $suffix) {
+            if (is_file($path.$suffix)) {
+                unlink($path.$suffix);
+            }
+        }
+    }
+
+    private function deleteTestDatabaseDirectory(): void
+    {
+        if (! isset($this->testDatabaseDirectory) || ! is_dir($this->testDatabaseDirectory)) {
+            return;
+        }
+
+        $entries = scandir($this->testDatabaseDirectory);
+
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $this->testDatabaseDirectory.DIRECTORY_SEPARATOR.$entry;
+
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+
+        @rmdir($this->testDatabaseDirectory);
     }
 }

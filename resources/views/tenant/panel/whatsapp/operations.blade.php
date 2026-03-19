@@ -112,6 +112,19 @@
             <div data-section="summary" class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <div class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando indicadores operacionais...</div>
             </div>
+
+            <div class="mt-4 border-t border-stone-200 pt-4">
+                <div class="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                        <h3 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Execução Recorrente</h3>
+                        <p class="mt-1 text-sm text-slate-600">Último estado do scheduler para automações, agente e housekeeping operacional.</p>
+                    </div>
+                    <p class="max-w-md text-xs leading-5 text-slate-500">Esses sinais saem diretamente do event log operacional do tenant, sem polling agressivo e sem store paralelo.</p>
+                </div>
+                <div data-section="scheduler-runs" class="grid gap-3 lg:grid-cols-3">
+                    <div class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando estado do scheduler...</div>
+                </div>
+            </div>
         </section>
 
         <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
@@ -253,6 +266,12 @@
                         Tipo
                         <select data-control="feed-type" class="mt-1 w-full rounded-2xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm normal-case tracking-normal text-slate-900 outline-none transition focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100">
                             <option value="">Todos</option>
+                            <option value="automation_scheduler_run_completed">automation_scheduler_run_completed</option>
+                            <option value="automation_scheduler_run_failed">automation_scheduler_run_failed</option>
+                            <option value="agent_scheduler_run_completed">agent_scheduler_run_completed</option>
+                            <option value="agent_scheduler_run_failed">agent_scheduler_run_failed</option>
+                            <option value="housekeeping_run_completed">housekeeping_run_completed</option>
+                            <option value="housekeeping_run_failed">housekeeping_run_failed</option>
                             <option value="automation_run_completed">automation_run_completed</option>
                             <option value="automation_run_failed">automation_run_failed</option>
                             <option value="agent_run_completed">agent_run_completed</option>

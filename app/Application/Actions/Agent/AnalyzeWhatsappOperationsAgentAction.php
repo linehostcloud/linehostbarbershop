@@ -15,6 +15,7 @@ use App\Domain\Automation\Models\AutomationRun;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Integration\Models\IntegrationAttempt;
 use App\Domain\Observability\Models\EventLog;
+use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use App\Infrastructure\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -27,6 +28,7 @@ class AnalyzeWhatsappOperationsAgentAction
         private readonly DiscoverWhatsappAutomationCandidatesAction $discoverAutomationCandidates,
         private readonly CalculateWhatsappProviderHealthAction $calculateProviderHealth,
         private readonly RecordWhatsappAgentEventAction $recordEvent,
+        private readonly TenantExecutionLockManager $lockManager,
         private readonly TenantContext $tenantContext,
     ) {
     }
@@ -37,6 +39,41 @@ class AnalyzeWhatsappOperationsAgentAction
     public function execute(?OperationalWindow $window = null): array
     {
         $window ??= $this->defaultWindow();
+        $lockTtlSeconds = max(30, (int) config('communication.whatsapp.execution_locks.agent_seconds', 300));
+        $lock = $this->lockManager->executeForCurrentTenantConnection(
+            operation: 'whatsapp_agent',
+            seconds: $lockTtlSeconds,
+            callback: fn (): array => $this->executeUnlocked($window),
+        );
+
+        if (! $lock['acquired']) {
+            return [
+                'agent_run_id' => null,
+                'insights_created' => 0,
+                'insights_refreshed' => 0,
+                'insights_resolved' => 0,
+                'insights_ignored' => 0,
+                'safe_actions_executed' => 0,
+                'active_insights_total' => AgentInsight::query()
+                    ->where('channel', 'whatsapp')
+                    ->where('status', 'active')
+                    ->count(),
+                'skipped_due_to_lock' => true,
+                'lock_key' => $lock['lock_key'],
+            ];
+        }
+
+        return array_merge((array) $lock['result'], [
+            'skipped_due_to_lock' => false,
+            'lock_key' => $lock['lock_key'],
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function executeUnlocked(OperationalWindow $window): array
+    {
         $now = CarbonImmutable::now(config('app.timezone', 'UTC'));
         $this->ensureDefaults->execute();
 

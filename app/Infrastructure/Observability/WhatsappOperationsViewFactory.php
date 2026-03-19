@@ -135,6 +135,37 @@ class WhatsappOperationsViewFactory
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    public function schedulerRunSummary(?EventLog $eventLog): ?array
+    {
+        if ($eventLog === null) {
+            return null;
+        }
+
+        return [
+            'id' => $eventLog->id,
+            'scheduler_run_id' => data_get($eventLog->context_json, 'scheduler_run_id') ?? $eventLog->aggregate_id,
+            'scheduler_type' => data_get($eventLog->context_json, 'scheduler_type'),
+            'status' => $this->schedulerStatus($eventLog),
+            'event_name' => $eventLog->event_name,
+            'tenant_id' => data_get($eventLog->payload_json, 'tenant_id'),
+            'tenant_slug' => data_get($eventLog->payload_json, 'tenant_slug'),
+            'started_at' => data_get($eventLog->payload_json, 'started_at'),
+            'completed_at' => data_get($eventLog->payload_json, 'completed_at')
+                ?? data_get($eventLog->payload_json, 'failed_at')
+                ?? ($this->schedulerStatus($eventLog) === 'running' ? null : $eventLog->occurred_at?->toIso8601String()),
+            'duration_ms' => data_get($eventLog->payload_json, 'duration_ms'),
+            'error_message' => data_get($eventLog->payload_json, 'error_message'),
+            'skipped_due_to_lock' => (bool) data_get($eventLog->payload_json, 'skipped_due_to_lock', false),
+            'lock_key' => data_get($eventLog->payload_json, 'lock_key'),
+            'occurred_at' => $eventLog->occurred_at?->toIso8601String(),
+            'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
+            'result' => $this->sanitizer->sanitize($eventLog->result_json ?? []),
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function boundarySummaryItem(BoundaryRejectionAudit $audit): array
@@ -376,6 +407,15 @@ class WhatsappOperationsViewFactory
         $message = $eventLog->message;
         $reason = (string) (data_get($eventLog->payload_json, 'reason') ?? data_get($eventLog->result_json, 'reason') ?? '');
         $type = match ($eventLog->event_name) {
+            'whatsapp.automation.scheduler_run_started' => 'automation_scheduler_run_started',
+            'whatsapp.automation.scheduler_run_completed' => 'automation_scheduler_run_completed',
+            'whatsapp.automation.scheduler_run_failed' => 'automation_scheduler_run_failed',
+            'whatsapp.agent.scheduler_run_started' => 'agent_scheduler_run_started',
+            'whatsapp.agent.scheduler_run_completed' => 'agent_scheduler_run_completed',
+            'whatsapp.agent.scheduler_run_failed' => 'agent_scheduler_run_failed',
+            'whatsapp.housekeeping.run_started' => 'housekeeping_run_started',
+            'whatsapp.housekeeping.run_completed' => 'housekeeping_run_completed',
+            'whatsapp.housekeeping.run_failed' => 'housekeeping_run_failed',
             'outbox.event.reclaim.blocked' => 'manual_review_required',
             'whatsapp.message.fallback.scheduled' => 'provider_fallback_scheduled',
             'whatsapp.message.fallback.executed' => 'provider_fallback_executed',
@@ -411,7 +451,7 @@ class WhatsappOperationsViewFactory
                     : null,
                 $slot,
             ),
-            'status' => $eventLog->status,
+            'status' => $this->feedEventStatus($eventLog),
             'error_code' => is_string(data_get($eventLog->payload_json, 'fallback.trigger_error_code'))
                 ? (string) data_get($eventLog->payload_json, 'fallback.trigger_error_code')
                 : (is_string(data_get($eventLog->payload_json, 'risk_error_code'))
@@ -419,6 +459,12 @@ class WhatsappOperationsViewFactory
                     : null),
             'direction' => null,
             'severity' => match ($eventLog->event_name) {
+                'whatsapp.automation.scheduler_run_failed',
+                'whatsapp.agent.scheduler_run_failed',
+                'whatsapp.housekeeping.run_failed' => 'high',
+                'whatsapp.automation.scheduler_run_started',
+                'whatsapp.agent.scheduler_run_started',
+                'whatsapp.housekeeping.run_started' => 'info',
                 'outbox.event.reclaim.blocked' => 'high',
                 'whatsapp.message.duplicate_risk_detected' => 'medium',
                 'whatsapp.message.fallback.executed' => 'medium',
@@ -432,6 +478,29 @@ class WhatsappOperationsViewFactory
             'occurred_at' => $eventLog->occurred_at?->toIso8601String(),
             'reference_id' => $eventLog->id,
             'message' => match ($eventLog->event_name) {
+                'whatsapp.automation.scheduler_run_started' => 'Execução recorrente das automações iniciada.',
+                'whatsapp.automation.scheduler_run_completed' => sprintf(
+                    'Scheduler das automações concluído: %d automações, %d candidatos e %d mensagens enfileiradas.',
+                    (int) data_get($eventLog->payload_json, 'processed_automations', 0),
+                    (int) data_get($eventLog->payload_json, 'candidates_found', 0),
+                    (int) data_get($eventLog->payload_json, 'messages_queued', 0),
+                ),
+                'whatsapp.automation.scheduler_run_failed' => 'Scheduler das automações falhou.',
+                'whatsapp.agent.scheduler_run_started' => 'Execução recorrente do agente iniciada.',
+                'whatsapp.agent.scheduler_run_completed' => sprintf(
+                    'Scheduler do agente concluído: %d insights criados e %d resolvidos.',
+                    (int) data_get($eventLog->payload_json, 'insights_created', 0),
+                    (int) data_get($eventLog->payload_json, 'insights_resolved', 0),
+                ),
+                'whatsapp.agent.scheduler_run_failed' => 'Scheduler do agente falhou.',
+                'whatsapp.housekeeping.run_started' => 'Housekeeping operacional iniciado.',
+                'whatsapp.housekeeping.run_completed' => sprintf(
+                    'Housekeeping concluído: %d outbox, %d logs e %d tentativas limpas.',
+                    (int) data_get($eventLog->payload_json, 'pruned.outbox_events', 0),
+                    (int) data_get($eventLog->payload_json, 'pruned.event_logs', 0),
+                    (int) data_get($eventLog->payload_json, 'pruned.integration_attempts', 0),
+                ),
+                'whatsapp.housekeeping.run_failed' => 'Housekeeping operacional falhou.',
                 'outbox.event.reclaim.blocked' => 'Reclaim automático bloqueado; revisão manual exigida.',
                 'whatsapp.message.fallback.scheduled' => 'Fallback controlado agendado para o provider secundário.',
                 'whatsapp.message.fallback.executed' => 'Fallback controlado executado no provider secundário.',
@@ -466,6 +535,8 @@ class WhatsappOperationsViewFactory
                 'message_id' => $eventLog->message_id,
                 'aggregate_id' => $eventLog->aggregate_id,
                 'automation_id' => $eventLog->automation_id,
+                'scheduler_type' => data_get($eventLog->context_json, 'scheduler_type'),
+                'scheduler_run_id' => data_get($eventLog->context_json, 'scheduler_run_id'),
                 'agent_run_id' => data_get($eventLog->context_json, 'agent_run_id'),
                 'insight_id' => data_get($eventLog->context_json, 'insight_id'),
                 'insight_type' => data_get($eventLog->payload_json, 'insight_type')
@@ -494,6 +565,12 @@ class WhatsappOperationsViewFactory
                 'suggested_action' => data_get($eventLog->payload_json, 'suggested_action'),
                 'skip_reasons' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'skip_reasons', [])),
                 'failed_reasons' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'failed_reasons', [])),
+                'duration_ms' => data_get($eventLog->payload_json, 'duration_ms'),
+                'error_message' => data_get($eventLog->payload_json, 'error_message'),
+                'skipped_due_to_lock' => (bool) data_get($eventLog->payload_json, 'skipped_due_to_lock', false),
+                'lock_key' => data_get($eventLog->payload_json, 'lock_key'),
+                'pruned' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'pruned', [])),
+                'reclaim' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'reclaim', [])),
                 'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
                 'result' => $this->sanitizer->sanitize($eventLog->result_json ?? []),
             ],
@@ -634,6 +711,43 @@ class WhatsappOperationsViewFactory
         }
 
         return $slot ?? 'unknown';
+    }
+
+    private function feedEventStatus(EventLog $eventLog): ?string
+    {
+        if ($this->isSchedulerEvent($eventLog->event_name)) {
+            return $this->schedulerStatus($eventLog);
+        }
+
+        return $eventLog->status;
+    }
+
+    private function schedulerStatus(EventLog $eventLog): string
+    {
+        return match ($eventLog->event_name) {
+            'whatsapp.automation.scheduler_run_started',
+            'whatsapp.agent.scheduler_run_started',
+            'whatsapp.housekeeping.run_started' => 'running',
+            'whatsapp.automation.scheduler_run_failed',
+            'whatsapp.agent.scheduler_run_failed',
+            'whatsapp.housekeeping.run_failed' => 'failed',
+            default => (string) data_get($eventLog->result_json, 'status', 'completed'),
+        };
+    }
+
+    private function isSchedulerEvent(?string $eventName): bool
+    {
+        return in_array($eventName, [
+            'whatsapp.automation.scheduler_run_started',
+            'whatsapp.automation.scheduler_run_completed',
+            'whatsapp.automation.scheduler_run_failed',
+            'whatsapp.agent.scheduler_run_started',
+            'whatsapp.agent.scheduler_run_completed',
+            'whatsapp.agent.scheduler_run_failed',
+            'whatsapp.housekeeping.run_started',
+            'whatsapp.housekeeping.run_completed',
+            'whatsapp.housekeeping.run_failed',
+        ], true);
     }
 
     /**
