@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Application\Actions\Communication\CalculateWhatsappProviderHealthAction;
+use App\Domain\Agent\Models\AgentInsight;
+use App\Domain\Agent\Models\AgentRun;
 use App\Domain\Automation\Models\AutomationRun;
 use App\Domain\Automation\Models\AutomationRunTarget;
 use App\Domain\Auth\Models\AuditLog;
@@ -111,6 +113,25 @@ class WhatsappOperationsController extends Controller
         $automationQueuedTotal = (clone $automationTargetsQuery)->where('status', 'queued')->count();
         $automationSkippedTotal = (clone $automationTargetsQuery)->where('status', 'skipped')->count();
         $automationFailedTotal = (clone $automationTargetsQuery)->where('status', 'failed')->count();
+        $agentActiveInsightsQuery = AgentInsight::query()
+            ->where('channel', 'whatsapp')
+            ->where('status', 'active');
+
+        if ($providerFilter !== null) {
+            $agentActiveInsightsQuery->where(function (Builder $query) use ($providerFilter): void {
+                $query
+                    ->whereNull('provider')
+                    ->orWhere('provider', $providerFilter);
+            });
+        }
+
+        $agentHighSeverityTotal = (clone $agentActiveInsightsQuery)
+            ->where('severity', 'high')
+            ->count();
+        $latestAgentRun = AgentRun::query()
+            ->where('channel', 'whatsapp')
+            ->latest('started_at')
+            ->first();
 
         return response()->json([
             'data' => [
@@ -129,9 +150,21 @@ class WhatsappOperationsController extends Controller
                     'automation_messages_queued_total' => $automationQueuedTotal,
                     'automation_skipped_total' => $automationSkippedTotal,
                     'automation_failed_total' => $automationFailedTotal,
+                    'agent_active_insights_total' => (clone $agentActiveInsightsQuery)->count(),
+                    'agent_high_severity_total' => $agentHighSeverityTotal,
                     'boundary_rejections_total' => $boundaryTotal,
                     'pending_queue_total' => $pendingQueueTotal,
                     'operational_failure_rate' => $this->percentage($operationalFailuresTotal, $attemptTotal),
+                ],
+                'agent' => [
+                    'active_insights_total' => (clone $agentActiveInsightsQuery)->count(),
+                    'high_severity_total' => $agentHighSeverityTotal,
+                    'latest_run' => $latestAgentRun !== null ? [
+                        'id' => $latestAgentRun->id,
+                        'status' => $latestAgentRun->status,
+                        'started_at' => $latestAgentRun->started_at?->toIso8601String(),
+                        'completed_at' => $latestAgentRun->completed_at?->toIso8601String(),
+                    ] : null,
                 ],
                 'automations' => [
                     'runs_total' => $automationRunsTotal,
@@ -159,6 +192,88 @@ class WhatsappOperationsController extends Controller
                     'code_totals' => $boundaryCodeTotals,
                 ],
             ],
+        ]);
+    }
+
+    public function agent(
+        WhatsappOperationalQueryRequest $request,
+        WhatsappOperationsViewFactory $viewFactory,
+    ): JsonResponse {
+        $window = $request->window();
+        $providerFilter = $this->resolvedProviderFilter($request);
+
+        $baseQuery = AgentInsight::query()
+            ->where('channel', 'whatsapp')
+            ->when(
+                $providerFilter !== null,
+                fn (Builder $query): Builder => $query->where(function (Builder $query) use ($providerFilter): void {
+                    $query
+                        ->whereNull('provider')
+                        ->orWhere('provider', $providerFilter);
+                }),
+            )
+            ->when(
+                $request->filled('status'),
+                fn (Builder $query): Builder => $query->where('status', (string) $request->string('status')),
+                fn (Builder $query): Builder => $query->where(function (Builder $query) use ($window): void {
+                    $query
+                        ->where('status', 'active')
+                        ->orWhereBetween('last_detected_at', [$window->startedAt, $window->endedAt]);
+                }),
+            )
+            ->when(
+                $request->filled('type'),
+                fn (Builder $query): Builder => $query->where('type', (string) $request->string('type')),
+            );
+
+        $paginator = (clone $baseQuery)
+            ->orderByRaw("case when status = 'active' then 0 when status = 'executed' then 1 when status = 'ignored' then 2 else 3 end")
+            ->orderBy('priority')
+            ->latest('last_detected_at')
+            ->paginate($request->perPage());
+
+        $activeInsightsQuery = AgentInsight::query()
+            ->where('channel', 'whatsapp')
+            ->where('status', 'active')
+            ->when(
+                $providerFilter !== null,
+                fn (Builder $query): Builder => $query->where(function (Builder $query) use ($providerFilter): void {
+                    $query
+                        ->whereNull('provider')
+                        ->orWhere('provider', $providerFilter);
+                }),
+            );
+
+        return response()->json([
+            'data' => [
+                'window' => $this->windowPayload($window),
+                'filters' => $this->filtersPayload($request, $providerFilter),
+                'summary' => [
+                    'active_total' => (clone $activeInsightsQuery)->count(),
+                    'high_severity_total' => (clone $activeInsightsQuery)->where('severity', 'high')->count(),
+                    'type_totals' => $this->countPairs(
+                        $this->groupedCounts((clone $activeInsightsQuery), 'type'),
+                        'type',
+                    ),
+                ],
+                'latest_run' => $viewFactory->agentRunSummary(
+                    AgentRun::query()
+                        ->where('channel', 'whatsapp')
+                        ->latest('started_at')
+                        ->first(),
+                ),
+                'insights' => collect($paginator->items())
+                    ->map(fn (AgentInsight $insight): array => $viewFactory->agentInsightItem($insight))
+                    ->values()
+                    ->all(),
+            ],
+            'meta' => array_merge(
+                $this->paginationMeta($paginator->currentPage(), $paginator->perPage(), $paginator->total()),
+                [
+                    'window' => $this->windowPayload($window),
+                    'filters' => $this->filtersPayload($request, $providerFilter),
+                ],
+            ),
         ]);
     }
 
@@ -539,6 +654,12 @@ class WhatsappOperationsController extends Controller
             'duplicate_risk_detected',
             'automation_run_completed',
             'automation_run_failed',
+            'agent_run_completed',
+            'agent_run_failed',
+            'agent_insight_created',
+            'agent_insight_resolved',
+            'agent_insight_ignored',
+            'agent_recommendation_executed',
         ])) {
             $query = EventLog::query()
                 ->with('message')
@@ -546,7 +667,11 @@ class WhatsappOperationsController extends Controller
                 ->whereBetween('occurred_at', [$window->startedAt, $window->endedAt]);
 
             if ($providerFilter !== null) {
-                $query->whereHas('message', fn (Builder $query): Builder => $query->where('provider', $providerFilter));
+                $query->where(function (Builder $query) use ($providerFilter): void {
+                    $query
+                        ->whereHas('message', fn (Builder $messageQuery): Builder => $messageQuery->where('provider', $providerFilter))
+                        ->orWhere('context_json->provider', $providerFilter);
+                });
             }
 
             if ($request->filled('status')) {
@@ -1047,6 +1172,12 @@ class WhatsappOperationsController extends Controller
             'duplicate_risk_detected' => ['whatsapp.message.duplicate_risk_detected'],
             'automation_run_completed' => ['whatsapp.automation.run.completed'],
             'automation_run_failed' => ['whatsapp.automation.run.failed'],
+            'agent_run_completed' => ['whatsapp.agent.run.completed'],
+            'agent_run_failed' => ['whatsapp.agent.run.failed'],
+            'agent_insight_created' => ['whatsapp.agent.insight.created'],
+            'agent_insight_resolved' => ['whatsapp.agent.insight.resolved'],
+            'agent_insight_ignored' => ['whatsapp.agent.insight.ignored'],
+            'agent_recommendation_executed' => ['whatsapp.agent.recommendation.executed'],
             default => [
                 'outbox.event.reclaimed',
                 'outbox.event.reclaim.blocked',
@@ -1056,6 +1187,12 @@ class WhatsappOperationsController extends Controller
                 'whatsapp.message.duplicate_risk_detected',
                 'whatsapp.automation.run.completed',
                 'whatsapp.automation.run.failed',
+                'whatsapp.agent.run.completed',
+                'whatsapp.agent.run.failed',
+                'whatsapp.agent.insight.created',
+                'whatsapp.agent.insight.resolved',
+                'whatsapp.agent.insight.ignored',
+                'whatsapp.agent.recommendation.executed',
             ],
         };
     }

@@ -39,6 +39,18 @@ return [
                 ],
             ],
         ],
+        'agent' => [
+            'window_minutes' => (int) env('WHATSAPP_AGENT_WINDOW_MINUTES', 120),
+            'provider_signal_alert_threshold' => (int) env('WHATSAPP_AGENT_PROVIDER_SIGNAL_ALERT_THRESHOLD', 2),
+            'duplicate_risk_alert_threshold' => (int) env('WHATSAPP_AGENT_DUPLICATE_RISK_ALERT_THRESHOLD', 2),
+            'delivery_instability_issue_threshold' => (int) env('WHATSAPP_AGENT_DELIVERY_INSTABILITY_ISSUE_THRESHOLD', 4),
+            'delivery_instability_min_attempts' => (int) env('WHATSAPP_AGENT_DELIVERY_INSTABILITY_MIN_ATTEMPTS', 5),
+            'delivery_instability_failure_rate' => (float) env('WHATSAPP_AGENT_DELIVERY_INSTABILITY_FAILURE_RATE', 25),
+            'reminder_opportunity_min_candidates' => (int) env('WHATSAPP_AGENT_REMINDER_OPPORTUNITY_MIN_CANDIDATES', 2),
+            'reactivation_opportunity_min_candidates' => (int) env('WHATSAPP_AGENT_REACTIVATION_OPPORTUNITY_MIN_CANDIDATES', 3),
+            'automation_stale_days' => (int) env('WHATSAPP_AGENT_AUTOMATION_STALE_DAYS', 7),
+            'ignored_reopen_hours' => (int) env('WHATSAPP_AGENT_IGNORED_REOPEN_HOURS', 24),
+        ],
         'testing_providers' => [
             'fake',
             'fake-transient-failure',

@@ -30,6 +30,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
         lastUpdated: rootElement.querySelector('[data-last-updated]'),
         autoRefreshState: rootElement.querySelector('[data-auto-refresh-state]'),
         summary: rootElement.querySelector('[data-section="summary"]'),
+        agent: rootElement.querySelector('[data-section="agent"]'),
         providers: rootElement.querySelector('[data-section="providers"]'),
         attention: rootElement.querySelector('[data-section="attention"]'),
         queue: rootElement.querySelector('[data-section="queue"]'),
@@ -137,6 +138,8 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
                 if (section === 'summary') {
                     loadSummary();
+                } else if (section === 'agent') {
+                    loadAgent();
                 } else if (section === 'providers') {
                     loadProviders();
                 } else if (section === 'attention') {
@@ -249,6 +252,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
 
         const results = await Promise.allSettled([
             loadSummary(),
+            loadAgent(),
             loadProviders(),
             loadAttention(),
             loadQueue(),
@@ -278,6 +282,24 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
             return response;
         } catch (error) {
             renderSectionError(elements.summary, friendlyError(error, 'Nao foi possivel carregar o resumo operacional.'), 'summary');
+            throw error;
+        }
+    }
+
+    async function loadAgent() {
+        renderLoading(elements.agent, 'Carregando insights do agente operacional...');
+
+        try {
+            const response = await getJson(boot.urls.agent, compactParams({
+                window: state.window,
+                provider: state.provider || undefined,
+                per_page: 4,
+            }));
+
+            renderAgent(response.data);
+            return response;
+        } catch (error) {
+            renderSectionError(elements.agent, friendlyError(error, 'Nao foi possivel carregar os insights do agente operacional.'), 'agent');
             throw error;
         }
     }
@@ -537,6 +559,22 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 rows: summarizeRows(payload?.automations?.skip_reason_totals || [], 'reason', 3),
             },
             {
+                title: 'Insights ativos do agente',
+                value: cards.agent_active_insights_total || 0,
+                tone: Number(cards.agent_high_severity_total || 0) > 0 ? 'rose' : (Number(cards.agent_active_insights_total || 0) > 0 ? 'amber' : 'emerald'),
+                caption: Number(cards.agent_high_severity_total || 0) > 0
+                    ? `${cards.agent_high_severity_total || 0} alertas de alta severidade aguardam revisao.`
+                    : 'Estado atual do agente operacional prudente.',
+                rows: [],
+            },
+            {
+                title: 'Alertas altos do agente',
+                value: cards.agent_high_severity_total || 0,
+                tone: Number(cards.agent_high_severity_total || 0) > 0 ? 'rose' : 'emerald',
+                caption: 'Insights de alta severidade ativos no momento.',
+                rows: [],
+            },
+            {
                 title: 'Boundary rejections',
                 value: cards.boundary_rejections_total || 0,
                 tone: Number(cards.boundary_rejections_total || 0) > 0 ? 'rose' : 'emerald',
@@ -567,6 +605,82 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 </div>
             </article>
         `).join('');
+    }
+
+    function renderAgent(payload) {
+        const summary = payload?.summary || {};
+        const latestRun = payload?.latest_run || null;
+        const insights = Array.isArray(payload?.insights) ? payload.insights : [];
+
+        const summaryTiles = [
+            metricTile(
+                'Insights Ativos',
+                summary.active_total || 0,
+                'Recomendacoes e alertas ainda abertos.',
+                Number(summary.high_severity_total || 0) > 0 ? 'amber' : 'emerald',
+            ),
+            metricTile(
+                'Alta Severidade',
+                summary.high_severity_total || 0,
+                'Alertas que merecem triagem humana rapida.',
+                Number(summary.high_severity_total || 0) > 0 ? 'rose' : 'emerald',
+            ),
+            metricTile(
+                'Ultimo Run',
+                latestRun?.status || 'sem run',
+                latestRun?.completed_at
+                    ? `Concluido em ${formatDateTime(latestRun.completed_at)}`
+                    : 'Sem execucao recente registrada.',
+                latestRun?.status === 'failed' ? 'rose' : 'slate',
+            ),
+        ];
+
+        elements.agent.innerHTML = `
+            <div class="space-y-4">
+                <div class="grid gap-3 lg:grid-cols-3">
+                    ${summaryTiles.join('')}
+                </div>
+
+                <div>
+                    <div class="mb-2 flex flex-wrap gap-1.5">
+                        ${(summary.type_totals || []).length > 0
+                            ? summary.type_totals.map((item) => badge(`${item.type} · ${item.total}`, item.total > 0 ? 'stone' : 'emerald')).join('')
+                            : '<span class="text-sm text-slate-500">Sem distribuicao de insights ativa no momento.</span>'}
+                    </div>
+                </div>
+
+                <div class="space-y-3">
+                    ${insights.length > 0
+                        ? insights.map((item) => `
+                            <article class="rounded-2xl border ${item.severity === 'high' ? 'border-rose-200 bg-rose-50/40' : 'border-stone-200 bg-white'} px-4 py-3">
+                                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div class="min-w-0">
+                                        <div class="flex flex-wrap gap-1.5">
+                                            ${badge(item.type || 'insight', typeTone(item.type))}
+                                            ${severityBadge(item.severity)}
+                                            ${badge(item.status || 'active', statusTone(item.status))}
+                                            ${item.provider ? badge(item.provider, 'slate') : ''}
+                                            ${item.slot ? badge(item.slot, 'stone') : ''}
+                                            ${item.execution_mode ? badge(item.execution_mode, item.execution_mode === 'manual_safe_action' ? 'emerald' : 'stone') : ''}
+                                        </div>
+                                        <p class="mt-3 text-sm font-medium leading-6 text-slate-950">${e(item.title || 'Insight operacional')}</p>
+                                        <p class="mt-2 text-sm leading-6 text-slate-600">${e(item.summary || 'Sem resumo adicional.')}</p>
+                                        <div class="mt-3 flex flex-wrap gap-1.5">
+                                            ${item.target_label ? badge(item.target_label, 'stone') : ''}
+                                            ${item.suggested_action ? badge(`acao ${item.suggested_action}`, item.execution_mode === 'manual_safe_action' ? 'emerald' : 'amber') : ''}
+                                        </div>
+                                        <p class="mt-2 text-xs leading-5 text-slate-500">
+                                            ${agentEvidenceLine(item)}
+                                        </p>
+                                    </div>
+                                    <div class="shrink-0 text-xs font-medium text-slate-500">${formatDateTime(item.last_detected_at || item.first_detected_at)}</div>
+                                </div>
+                            </article>
+                        `).join('')
+                        : '<div class="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-5 text-sm text-slate-500">Nenhum insight recente do agente nesta janela.</div>'}
+                </div>
+            </div>
+        `;
     }
 
     function renderProviders(items) {
@@ -1159,6 +1273,37 @@ function attentionRank(severity) {
     }
 }
 
+function agentEvidenceLine(item) {
+    const evidence = item?.evidence || {};
+    const notes = [];
+
+    if (evidence.operational_state) {
+        notes.push(`estado ${evidence.operational_state}`);
+    }
+
+    if (evidence.eligible_candidates_at_least !== undefined && evidence.eligible_candidates_at_least !== null) {
+        notes.push(`elegiveis >= ${evidence.eligible_candidates_at_least}`);
+    }
+
+    if (evidence.total !== undefined && evidence.total !== null) {
+        notes.push(`total ${evidence.total}`);
+    }
+
+    if (evidence.issue_total !== undefined && evidence.issue_total !== null) {
+        notes.push(`issues ${evidence.issue_total}`);
+    }
+
+    if (evidence.failure_rate !== undefined && evidence.failure_rate !== null) {
+        notes.push(`falha ${formatPercent(evidence.failure_rate)}`);
+    }
+
+    if (evidence.last_executed_at) {
+        notes.push(`ultimo run ${formatDateTime(evidence.last_executed_at)}`);
+    }
+
+    return notes.length > 0 ? notes.join(' · ') : 'Sem evidencia adicional agregada.';
+}
+
 function attentionLabel(type) {
     switch (type) {
         case 'outbox_failed':
@@ -1233,6 +1378,11 @@ function statusTone(status) {
         case 'queued':
         case 'processing':
             return 'amber';
+        case 'resolved':
+        case 'executed':
+            return 'emerald';
+        case 'ignored':
+            return 'stone';
         default:
             return 'stone';
     }
@@ -1263,19 +1413,33 @@ function typeTone(type) {
         case 'provider_fallback_executed':
         case 'outbox_reclaimed':
         case 'duplicate_risk_detected':
+        case 'automation_opportunity_reactivation':
+        case 'automation_opportunity_reminder':
+        case 'duplicate_risk_alert':
             return 'amber';
         case 'terminal_failure':
         case 'boundary_rejection':
         case 'manual_review_required':
         case 'provider_config_deactivated':
+        case 'provider_health_alert':
+        case 'delivery_instability_alert':
             return 'rose';
         case 'duplicate_prevented':
         case 'provider_healthcheck':
         case 'provider_config_activated':
         case 'automation_run_completed':
+        case 'agent_run_completed':
             return 'slate';
+        case 'agent_recommendation_executed':
+        case 'agent_insight_resolved':
+            return 'emerald';
         case 'automation_run_failed':
+        case 'agent_run_failed':
             return 'rose';
+        case 'agent_insight_created':
+            return 'amber';
+        case 'agent_insight_ignored':
+            return 'stone';
         default:
             return 'stone';
     }
@@ -1450,12 +1614,24 @@ function feedReferenceBadges(item) {
         badgesList.push(badge(`run ${shortReference(details.automation_run_id)}`, 'stone'));
     }
 
+    if (details.agent_run_id) {
+        badgesList.push(badge(`agent run ${shortReference(details.agent_run_id)}`, 'stone'));
+    }
+
+    if (details.insight_id) {
+        badgesList.push(badge(`insight ${shortReference(details.insight_id)}`, 'stone'));
+    }
+
     if (details.automation_target_id) {
         badgesList.push(badge(`target ${shortReference(details.automation_target_id)}`, 'stone'));
     }
 
     if (details.automation_type) {
         badgesList.push(badge(`automacao ${details.automation_type}`, 'stone'));
+    }
+
+    if (details.insight_type) {
+        badgesList.push(badge(`insight ${details.insight_type}`, 'stone'));
     }
 
     if (details.request_id) {
@@ -1507,6 +1683,22 @@ function feedSecondaryLine(item) {
 
     if (details.failed_total !== undefined && details.failed_total !== null) {
         notes.push(`falhas ${details.failed_total}`);
+    }
+
+    if (details.insights_created !== undefined && details.insights_created !== null) {
+        notes.push(`insights criados ${details.insights_created}`);
+    }
+
+    if (details.insights_refreshed !== undefined && details.insights_refreshed !== null) {
+        notes.push(`atualizados ${details.insights_refreshed}`);
+    }
+
+    if (details.insights_resolved !== undefined && details.insights_resolved !== null) {
+        notes.push(`resolvidos ${details.insights_resolved}`);
+    }
+
+    if (details.suggested_action) {
+        notes.push(`acao ${details.suggested_action}`);
     }
 
     if (details.http_status) {

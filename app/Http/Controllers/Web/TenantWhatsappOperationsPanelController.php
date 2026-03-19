@@ -57,6 +57,7 @@ class TenantWhatsappOperationsPanelController extends Controller
                 'urls' => [
                     'summary' => '/api/v1/operations/whatsapp/summary',
                     'providers' => '/api/v1/operations/whatsapp/providers',
+                    'agent' => '/api/v1/operations/whatsapp/agent',
                     'queue' => '/api/v1/operations/whatsapp/queue',
                     'boundary_summary' => '/api/v1/operations/whatsapp/boundary-rejections/summary',
                     'boundary_rejections' => '/api/v1/operations/whatsapp/boundary-rejections',

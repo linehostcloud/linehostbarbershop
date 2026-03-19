@@ -1,5 +1,6 @@
 <?php
 
+use App\Application\Actions\Agent\AnalyzeWhatsappOperationsAgentAction;
 use App\Application\Actions\Automation\ProcessWhatsappAutomationsAction;
 use App\Application\Actions\Observability\ReclaimStaleOutboxEventsAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
@@ -430,6 +431,82 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
     return self::SUCCESS;
 })->purpose('Processa automacoes deterministicas de WhatsApp por tenant sem bypass do pipeline oficial');
 
+Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de tenants especificos}', function (
+    TenantDatabaseManager $databaseManager,
+    AnalyzeWhatsappOperationsAgentAction $analyzeWhatsappOperationsAgent,
+) {
+    $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
+
+    $tenants = Tenant::query()
+        ->when(
+            $tenantIdentifiers !== [],
+            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
+                $tenantQuery
+                    ->whereIn('id', $tenantIdentifiers)
+                    ->orWhereIn('slug', $tenantIdentifiers);
+            }),
+            fn ($query) => $query->where('status', 'active'),
+        )
+        ->orderBy('slug')
+        ->get();
+
+    if ($tenants->isEmpty()) {
+        $this->warn('Nenhum tenant encontrado para execucao do agente operacional de WhatsApp.');
+
+        return self::SUCCESS;
+    }
+
+    $totals = [
+        'runs' => 0,
+        'created' => 0,
+        'refreshed' => 0,
+        'resolved' => 0,
+        'ignored' => 0,
+        'active' => 0,
+    ];
+
+    foreach ($tenants as $tenant) {
+        $databaseManager->connect($tenant);
+
+        try {
+            $summary = $analyzeWhatsappOperationsAgent->execute();
+
+            $totals['runs']++;
+            $totals['created'] += (int) $summary['insights_created'];
+            $totals['refreshed'] += (int) $summary['insights_refreshed'];
+            $totals['resolved'] += (int) $summary['insights_resolved'];
+            $totals['ignored'] += (int) $summary['insights_ignored'];
+            $totals['active'] += (int) $summary['active_insights_total'];
+
+            $this->line(sprintf(
+                '[%s] run=%s created=%d refreshed=%d resolved=%d ignored=%d active=%d',
+                $tenant->slug,
+                $summary['agent_run_id'],
+                $summary['insights_created'],
+                $summary['insights_refreshed'],
+                $summary['insights_resolved'],
+                $summary['insights_ignored'],
+                $summary['active_insights_total'],
+            ));
+        } finally {
+            $databaseManager->disconnect();
+        }
+    }
+
+    $this->newLine();
+    $this->info(sprintf(
+        'Totais agente: runs=%d created=%d refreshed=%d resolved=%d ignored=%d active=%d',
+        $totals['runs'],
+        $totals['created'],
+        $totals['refreshed'],
+        $totals['resolved'],
+        $totals['ignored'],
+        $totals['active'],
+    ));
+
+    return self::SUCCESS;
+})->purpose('Analisa a operacao WhatsApp por tenant e gera insights auditaveis para o agente operacional');
+
 Artisan::command('tenancy:configure-whatsapp-provider
     {tenant : Slug ou ULID do tenant}
     {provider : Provider primario ou secundario}
@@ -596,3 +673,4 @@ Artisan::command('tenancy:whatsapp-healthcheck
 })->purpose('Executa health check do provider WhatsApp configurado para um tenant');
 
 Schedule::command('tenancy:process-whatsapp-automations')->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('tenancy:run-whatsapp-agent')->everyTenMinutes()->withoutOverlapping();

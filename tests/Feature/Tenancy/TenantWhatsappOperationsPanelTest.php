@@ -55,6 +55,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertOk()
             ->assertSee('Mensageria WhatsApp')
             ->assertSee('Resumo Operacional')
+            ->assertSee('Agente Operacional')
             ->assertSee('Saude por Provider')
             ->assertSee('Camada Deterministica')
             ->assertSee('Exige Atencao Agora')
@@ -66,6 +67,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('data-control="provider"', false)
             ->assertSee('data-control="auto-refresh"', false)
             ->assertSee('/api/v1/operations/whatsapp/summary', false)
+            ->assertSee('/api/v1/operations/whatsapp/agent', false)
             ->assertSee('/api/v1/operations/whatsapp/feed', false);
     }
 
@@ -218,6 +220,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertOk()
             ->assertSee('Mensageria WhatsApp')
             ->assertSee('/api/v1/operations/whatsapp/summary', false)
+            ->assertSee('/api/v1/operations/whatsapp/agent', false)
             ->assertSee('/api/v1/operations/whatsapp/providers', false)
             ->assertSee('/api/v1/operations/whatsapp/queue', false)
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections/summary', false)

@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AppointmentController;
 use App\Http\Controllers\Api\AcceptTenantInvitationController;
 use App\Http\Controllers\Api\AdminWhatsappProviderController;
 use App\Http\Controllers\Api\AdminWhatsappAutomationController;
+use App\Http\Controllers\Api\AdminWhatsappAgentController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\LogoutController;
 use App\Http\Controllers\Api\Auth\MeController;
@@ -158,9 +159,22 @@ Route::prefix('v1')->group(function (): void {
             Route::patch('/admin/whatsapp-automations/{type}', [AdminWhatsappAutomationController::class, 'update'])
                 ->middleware('tenant.ability:whatsapp.automations.write');
 
+            Route::get('/admin/whatsapp-agent/insights', [AdminWhatsappAgentController::class, 'index'])
+                ->middleware('tenant.ability:whatsapp.agent.read');
+            Route::get('/admin/whatsapp-agent/runs/latest', [AdminWhatsappAgentController::class, 'latestRun'])
+                ->middleware('tenant.ability:whatsapp.agent.read');
+            Route::post('/admin/whatsapp-agent/insights/{insight}/resolve', [AdminWhatsappAgentController::class, 'resolve'])
+                ->middleware('tenant.ability:whatsapp.agent.write');
+            Route::post('/admin/whatsapp-agent/insights/{insight}/ignore', [AdminWhatsappAgentController::class, 'ignore'])
+                ->middleware('tenant.ability:whatsapp.agent.write');
+            Route::post('/admin/whatsapp-agent/insights/{insight}/execute', [AdminWhatsappAgentController::class, 'execute'])
+                ->middleware('tenant.ability:whatsapp.agent.write');
+
             Route::get('/operations/whatsapp/summary', [WhatsappOperationsController::class, 'summary'])
                 ->middleware('tenant.ability:whatsapp.operations.read');
             Route::get('/operations/whatsapp/providers', [WhatsappOperationsController::class, 'providers'])
+                ->middleware('tenant.ability:whatsapp.operations.read');
+            Route::get('/operations/whatsapp/agent', [WhatsappOperationsController::class, 'agent'])
                 ->middleware('tenant.ability:whatsapp.operations.read');
             Route::get('/operations/whatsapp/queue', [WhatsappOperationsController::class, 'queue'])
                 ->middleware('tenant.ability:whatsapp.operations.read');

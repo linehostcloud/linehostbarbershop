@@ -11,6 +11,7 @@
             ['label' => 'Smart Routing', 'description' => 'motivo da decisao operacional e caminho escolhido antes do dispatch.'],
             ['label' => 'Decision Source', 'description' => 'primary_default, health_based_secondary, fallback_pinned ou manual_override.'],
             ['label' => 'Automacoes', 'description' => 'runs, skip reasons e mensagens enfileiradas agora aparecem no resumo e no feed operacional.'],
+            ['label' => 'Agente Operacional', 'description' => 'insights, recomendacoes seguras e evidencias agora saem do backend com trilha auditavel.'],
         ];
     @endphp
 
@@ -109,6 +110,19 @@
             <div data-section="summary" class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <div class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando indicadores operacionais...</div>
             </div>
+        </section>
+
+        <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
+            <div class="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Agente Operacional</h2>
+                    <p class="mt-1 text-sm text-slate-600">Camada prudente de recomendacao sobre a operacao real, com evidencias objetivas, sem acao irreversivel automatica.</p>
+                </div>
+                <p class="max-w-md text-xs leading-5 text-slate-500">
+                    O agente apenas sugere por padrao. Quando houver acao segura, ela fica explicitamente marcada e auditavel.
+                </p>
+            </div>
+            <div data-section="agent" class="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-slate-500">Carregando insights do agente...</div>
         </section>
 
         <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
@@ -239,6 +253,12 @@
                             <option value="">Todos</option>
                             <option value="automation_run_completed">automation_run_completed</option>
                             <option value="automation_run_failed">automation_run_failed</option>
+                            <option value="agent_run_completed">agent_run_completed</option>
+                            <option value="agent_run_failed">agent_run_failed</option>
+                            <option value="agent_insight_created">agent_insight_created</option>
+                            <option value="agent_insight_resolved">agent_insight_resolved</option>
+                            <option value="agent_insight_ignored">agent_insight_ignored</option>
+                            <option value="agent_recommendation_executed">agent_recommendation_executed</option>
                             <option value="provider_fallback_scheduled">provider_fallback_scheduled</option>
                             <option value="provider_fallback_executed">provider_fallback_executed</option>
                             <option value="duplicate_prevented">duplicate_prevented</option>

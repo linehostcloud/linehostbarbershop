@@ -9,11 +9,8 @@ use App\Domain\Automation\Models\AutomationRun;
 use App\Domain\Automation\Models\AutomationRunTarget;
 use App\Domain\Client\Models\Client;
 use App\Domain\Communication\Models\Message;
-use App\Domain\Order\Models\Order;
 use App\Application\Actions\Communication\QueueWhatsappMessageAction;
-use App\Infrastructure\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -21,10 +18,10 @@ class ProcessWhatsappAutomationsAction
 {
     public function __construct(
         private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaults,
+        private readonly DiscoverWhatsappAutomationCandidatesAction $discoverCandidates,
         private readonly QueueWhatsappMessageAction $queueWhatsappMessage,
         private readonly RenderWhatsappAutomationMessageAction $renderMessage,
         private readonly RecordWhatsappAutomationEventAction $recordEvent,
-        private readonly TenantContext $tenantContext,
     ) {
     }
 
@@ -212,75 +209,24 @@ class ProcessWhatsappAutomationsAction
         CarbonImmutable $now,
         int $limit,
     ): array {
-        $leadTimeMinutes = (int) data_get($automation->conditions_json, 'lead_time_minutes', 1440);
-        $toleranceMinutes = (int) data_get($automation->conditions_json, 'selection_tolerance_minutes', config('communication.whatsapp.automations.selection_tolerance_minutes', 10));
-        $windowStart = $now->addMinutes($leadTimeMinutes)->subMinutes($toleranceMinutes);
-        $windowEnd = $now->addMinutes($leadTimeMinutes)->addMinutes($toleranceMinutes);
-        $excludedStatuses = array_values(array_filter(
-            (array) data_get($automation->conditions_json, 'excluded_statuses', ['canceled', 'no_show', 'completed']),
-            'is_string',
-        ));
-        $overFetch = max($limit * 5, 25);
-        $appointments = Appointment::query()
-            ->with(['client', 'professional', 'primaryService'])
-            ->whereBetween('starts_at', [$windowStart, $windowEnd])
-            ->orderBy('starts_at')
-            ->limit($overFetch)
-            ->get();
-
         $summary = $this->emptyExecutionSummary();
+        $candidates = $this->discoverCandidates->execute($automation, $now, $limit);
+        $summary['candidates_found'] = $candidates->count();
 
-        foreach ($appointments as $appointment) {
-            if ($summary['candidates_found'] >= $limit) {
-                break;
-            }
-
-            $summary['candidates_found']++;
-
-            if (in_array((string) $appointment->status, $excludedStatuses, true) || $appointment->canceled_at !== null) {
-                $this->recordSkippedTarget($automation, $run, 'appointment', (string) $appointment->id, [
-                    'client_id' => $appointment->client_id,
-                    'appointment_id' => $appointment->id,
-                    'starts_at' => $appointment->starts_at?->toIso8601String(),
-                ], 'appointment_not_eligible', 'appointment_due_soon');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['appointment_not_eligible'] = (int) (($summary['skip_reasons']['appointment_not_eligible'] ?? 0) + 1);
-
-                continue;
-            }
-
-            if ($appointment->reminder_sent_at !== null) {
-                $this->recordSkippedTarget($automation, $run, 'appointment', (string) $appointment->id, [
-                    'client_id' => $appointment->client_id,
-                    'appointment_id' => $appointment->id,
-                    'starts_at' => $appointment->starts_at?->toIso8601String(),
-                ], 'reminder_already_sent', 'appointment_due_soon');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['reminder_already_sent'] = (int) (($summary['skip_reasons']['reminder_already_sent'] ?? 0) + 1);
-
-                continue;
-            }
-
-            if (($skipReason = $this->contactSkipReason($appointment->client, false)) !== null) {
-                $this->recordSkippedTarget($automation, $run, 'appointment', (string) $appointment->id, [
-                    'client_id' => $appointment->client_id,
-                    'appointment_id' => $appointment->id,
-                    'starts_at' => $appointment->starts_at?->toIso8601String(),
-                ], $skipReason, 'appointment_due_soon');
+        foreach ($candidates as $candidate) {
+            if (! $candidate->isEligible()) {
+                $skipReason = $candidate->skipReason ?? 'not_eligible';
+                $this->recordSkippedTarget(
+                    automation: $automation,
+                    run: $run,
+                    targetType: $candidate->targetType,
+                    targetId: $candidate->targetId,
+                    context: $candidate->context,
+                    skipReason: $skipReason,
+                    triggerReason: $candidate->triggerReason,
+                );
                 $summary['skipped_total']++;
                 $summary['skip_reasons'][$skipReason] = (int) (($summary['skip_reasons'][$skipReason] ?? 0) + 1);
-
-                continue;
-            }
-
-            if ($this->cooldownActive($automation, 'appointment', (string) $appointment->id, $now)) {
-                $this->recordSkippedTarget($automation, $run, 'appointment', (string) $appointment->id, [
-                    'client_id' => $appointment->client_id,
-                    'appointment_id' => $appointment->id,
-                    'starts_at' => $appointment->starts_at?->toIso8601String(),
-                ], 'cooldown_active', 'appointment_due_soon');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['cooldown_active'] = (int) (($summary['skip_reasons']['cooldown_active'] ?? 0) + 1);
 
                 continue;
             }
@@ -288,18 +234,18 @@ class ProcessWhatsappAutomationsAction
             $result = $this->queueAutomationMessage(
                 automation: $automation,
                 run: $run,
-                targetType: 'appointment',
-                targetId: (string) $appointment->id,
-                triggerReason: 'appointment_due_soon',
-                client: $appointment->client,
-                appointment: $appointment,
-                context: $this->appointmentAutomationContext($automation, $appointment, $now),
+                targetType: $candidate->targetType,
+                targetId: $candidate->targetId,
+                triggerReason: $candidate->triggerReason,
+                client: $candidate->client,
+                appointment: $candidate->appointment,
+                context: $candidate->context,
             );
 
             if ($result['queued']) {
                 $summary['messages_queued']++;
 
-                $appointment->forceFill([
+                $candidate->appointment?->forceFill([
                     'reminder_sent_at' => now(),
                     'confirmation_status' => 'reminder_queued',
                 ])->save();
@@ -323,86 +269,24 @@ class ProcessWhatsappAutomationsAction
         CarbonImmutable $now,
         int $limit,
     ): array {
-        $inactivityDays = (int) data_get($automation->conditions_json, 'inactivity_days', 45);
-        $minimumCompletedVisits = max(1, (int) data_get($automation->conditions_json, 'minimum_completed_visits', 1));
-        $overFetch = max($limit * 5, 50);
-        $clients = $this->reactivationBaseQuery($now)
-            ->limit($overFetch)
-            ->get();
-
         $summary = $this->emptyExecutionSummary();
+        $candidates = $this->discoverCandidates->execute($automation, $now, $limit);
+        $summary['candidates_found'] = $candidates->count();
 
-        foreach ($clients as $client) {
-            if ($summary['candidates_found'] >= $limit) {
-                break;
-            }
-
-            $summary['candidates_found']++;
-            $lastEngagementAt = $this->clientLastEngagementAt($client);
-            $completedVisits = $this->clientCompletedVisits($client);
-
-            if ($lastEngagementAt === null) {
-                $this->recordSkippedTarget($automation, $run, 'client', (string) $client->id, [
-                    'client_id' => $client->id,
-                ], 'no_visit_history', 'inactive_for_reactivation');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['no_visit_history'] = (int) (($summary['skip_reasons']['no_visit_history'] ?? 0) + 1);
-
-                continue;
-            }
-
-            if (($skipReason = $this->contactSkipReason($client, true)) !== null) {
-                $this->recordSkippedTarget($automation, $run, 'client', (string) $client->id, [
-                    'client_id' => $client->id,
-                    'last_engagement_at' => $lastEngagementAt->toIso8601String(),
-                ], $skipReason, 'inactive_for_reactivation');
+        foreach ($candidates as $candidate) {
+            if (! $candidate->isEligible()) {
+                $skipReason = $candidate->skipReason ?? 'not_eligible';
+                $this->recordSkippedTarget(
+                    automation: $automation,
+                    run: $run,
+                    targetType: $candidate->targetType,
+                    targetId: $candidate->targetId,
+                    context: $candidate->context,
+                    skipReason: $skipReason,
+                    triggerReason: $candidate->triggerReason,
+                );
                 $summary['skipped_total']++;
                 $summary['skip_reasons'][$skipReason] = (int) (($summary['skip_reasons'][$skipReason] ?? 0) + 1);
-
-                continue;
-            }
-
-            if ($completedVisits < $minimumCompletedVisits) {
-                $this->recordSkippedTarget($automation, $run, 'client', (string) $client->id, [
-                    'client_id' => $client->id,
-                    'completed_visits' => $completedVisits,
-                ], 'insufficient_history', 'inactive_for_reactivation');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['insufficient_history'] = (int) (($summary['skip_reasons']['insufficient_history'] ?? 0) + 1);
-
-                continue;
-            }
-
-            if ((int) ($client->future_appointments_count ?? 0) > 0) {
-                $this->recordSkippedTarget($automation, $run, 'client', (string) $client->id, [
-                    'client_id' => $client->id,
-                    'future_appointments_count' => (int) ($client->future_appointments_count ?? 0),
-                ], 'future_appointment_exists', 'inactive_for_reactivation');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['future_appointment_exists'] = (int) (($summary['skip_reasons']['future_appointment_exists'] ?? 0) + 1);
-
-                continue;
-            }
-
-            if ($lastEngagementAt->diffInDays($now) < $inactivityDays) {
-                $this->recordSkippedTarget($automation, $run, 'client', (string) $client->id, [
-                    'client_id' => $client->id,
-                    'last_engagement_at' => $lastEngagementAt->toIso8601String(),
-                    'inactive_days' => $lastEngagementAt->diffInDays($now),
-                ], 'not_inactive_enough', 'inactive_for_reactivation');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['not_inactive_enough'] = (int) (($summary['skip_reasons']['not_inactive_enough'] ?? 0) + 1);
-
-                continue;
-            }
-
-            if ($this->cooldownActive($automation, 'client', (string) $client->id, $now)) {
-                $this->recordSkippedTarget($automation, $run, 'client', (string) $client->id, [
-                    'client_id' => $client->id,
-                    'last_engagement_at' => $lastEngagementAt->toIso8601String(),
-                ], 'cooldown_active', 'inactive_for_reactivation');
-                $summary['skipped_total']++;
-                $summary['skip_reasons']['cooldown_active'] = (int) (($summary['skip_reasons']['cooldown_active'] ?? 0) + 1);
 
                 continue;
             }
@@ -410,12 +294,12 @@ class ProcessWhatsappAutomationsAction
             $result = $this->queueAutomationMessage(
                 automation: $automation,
                 run: $run,
-                targetType: 'client',
-                targetId: (string) $client->id,
-                triggerReason: 'inactive_for_reactivation',
-                client: $client,
-                appointment: null,
-                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+                targetType: $candidate->targetType,
+                targetId: $candidate->targetId,
+                triggerReason: $candidate->triggerReason,
+                client: $candidate->client,
+                appointment: $candidate->appointment,
+                context: $candidate->context,
             );
 
             if ($result['queued']) {
@@ -543,243 +427,6 @@ class ProcessWhatsappAutomationsAction
             'skip_reason' => $skipReason,
             'context_json' => $context,
         ]);
-    }
-
-    private function cooldownActive(
-        Automation $automation,
-        string $targetType,
-        string $targetId,
-        CarbonImmutable $now,
-    ): bool {
-        $cooldownHours = max(1, (int) $automation->cooldown_hours);
-
-        return AutomationRunTarget::query()
-            ->where('automation_id', $automation->id)
-            ->where('target_type', $targetType)
-            ->where('target_id', $targetId)
-            ->where('status', 'queued')
-            ->where(function ($query) use ($now, $cooldownHours): void {
-                $query
-                    ->where('created_at', '>=', $now->subHours($cooldownHours))
-                    ->orWhere('cooldown_until', '>', $now);
-            })
-            ->exists();
-    }
-
-    private function contactSkipReason(?Client $client, bool $requireMarketingOptIn): ?string
-    {
-        if ($client === null) {
-            return 'missing_client';
-        }
-
-        if (! is_string($client->phone_e164) || trim($client->phone_e164) === '') {
-            return 'missing_phone';
-        }
-
-        if (! $client->whatsapp_opt_in) {
-            return 'whatsapp_opt_out';
-        }
-
-        if ($requireMarketingOptIn && ! $client->marketing_opt_in) {
-            return 'marketing_opt_out';
-        }
-
-        return null;
-    }
-
-    private function reactivationBaseQuery(CarbonImmutable $now): \Illuminate\Database\Eloquent\Builder
-    {
-        return Client::query()
-            ->select('clients.*')
-            ->selectSub(
-                Order::query()
-                    ->selectRaw('MAX(closed_at)')
-                    ->whereColumn('client_id', 'clients.id')
-                    ->where('status', 'closed'),
-                'last_closed_order_at',
-            )
-            ->selectSub(
-                Appointment::query()
-                    ->selectRaw('MAX(completed_at)')
-                    ->whereColumn('client_id', 'clients.id')
-                    ->where('status', 'completed'),
-                'last_completed_appointment_at',
-            )
-            ->selectSub(
-                Order::query()
-                    ->selectRaw('COUNT(*)')
-                    ->whereColumn('client_id', 'clients.id')
-                    ->where('status', 'closed'),
-                'closed_orders_count',
-            )
-            ->selectSub(
-                Appointment::query()
-                    ->selectRaw('COUNT(*)')
-                    ->whereColumn('client_id', 'clients.id')
-                    ->where('status', 'completed'),
-                'completed_appointments_count',
-            )
-            ->selectSub(
-                Appointment::query()
-                    ->selectRaw('COUNT(*)')
-                    ->whereColumn('client_id', 'clients.id')
-                    ->whereNotIn('status', ['canceled', 'no_show', 'completed'])
-                    ->where('starts_at', '>', $now),
-                'future_appointments_count',
-            )
-            ->where(function ($query): void {
-                $query
-                    ->whereNotNull('last_visit_at')
-                    ->orWhereExists(
-                        Order::query()
-                            ->selectRaw('1')
-                            ->whereColumn('client_id', 'clients.id')
-                            ->where('status', 'closed'),
-                    )
-                    ->orWhereExists(
-                        Appointment::query()
-                            ->selectRaw('1')
-                            ->whereColumn('client_id', 'clients.id')
-                            ->where('status', 'completed'),
-                    );
-            })
-            ->orderBy('last_visit_at')
-            ->orderBy('updated_at');
-    }
-
-    private function clientLastEngagementAt(Client $client): ?CarbonImmutable
-    {
-        $candidates = array_filter([
-            $client->last_visit_at?->toIso8601String(),
-            $client->getAttribute('last_closed_order_at'),
-            $client->getAttribute('last_completed_appointment_at'),
-        ], static fn (mixed $value): bool => is_string($value) && $value !== '');
-
-        if ($candidates === []) {
-            return null;
-        }
-
-        $latest = null;
-
-        foreach ($candidates as $candidate) {
-            $current = CarbonImmutable::parse((string) $candidate);
-
-            if ($latest === null || $current->greaterThan($latest)) {
-                $latest = $current;
-            }
-        }
-
-        return $latest;
-    }
-
-    private function clientCompletedVisits(Client $client): int
-    {
-        return max(
-            (int) ($client->visit_count ?? 0),
-            (int) ($client->getAttribute('closed_orders_count') ?? 0),
-            (int) ($client->getAttribute('completed_appointments_count') ?? 0),
-        );
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function appointmentAutomationContext(
-        Automation $automation,
-        Appointment $appointment,
-        CarbonImmutable $now,
-    ): array {
-        $tenant = $this->tenantContext->current();
-        $timezone = $tenant?->timezone ?: config('app.timezone', 'UTC');
-        $startsAt = $appointment->starts_at !== null
-            ? CarbonImmutable::instance($appointment->starts_at)->setTimezone($timezone)
-            : null;
-
-        return [
-            'tenant' => [
-                'id' => $tenant?->id,
-                'trade_name' => $tenant?->trade_name,
-            ],
-            'automation' => [
-                'id' => $automation->id,
-                'name' => $automation->name,
-                'type' => $automation->trigger_event,
-            ],
-            'client' => $this->clientContext($appointment->client),
-            'appointment' => [
-                'id' => $appointment->id,
-                'status' => $appointment->status,
-                'starts_at' => $appointment->starts_at?->toIso8601String(),
-                'starts_at_local' => $startsAt?->format('d/m/Y H:i'),
-                'date' => $startsAt?->format('d/m/Y'),
-                'time' => $startsAt?->format('H:i'),
-                'lead_time_minutes' => max(0, $now->diffInMinutes(CarbonImmutable::instance($appointment->starts_at), false)),
-            ],
-            'professional' => [
-                'id' => $appointment->professional?->id,
-                'full_name' => $appointment->professional?->full_name,
-                'first_name' => $this->firstName($appointment->professional?->full_name),
-            ],
-            'service' => [
-                'id' => $appointment->primaryService?->id,
-                'name' => $appointment->primaryService?->name,
-            ],
-        ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function clientReactivationContext(
-        Automation $automation,
-        Client $client,
-        CarbonImmutable $lastEngagementAt,
-        CarbonImmutable $now,
-    ): array {
-        $tenant = $this->tenantContext->current();
-        $timezone = $tenant?->timezone ?: config('app.timezone', 'UTC');
-        $localizedLastEngagement = $lastEngagementAt->setTimezone($timezone);
-
-        return [
-            'tenant' => [
-                'id' => $tenant?->id,
-                'trade_name' => $tenant?->trade_name,
-            ],
-            'automation' => [
-                'id' => $automation->id,
-                'name' => $automation->name,
-                'type' => $automation->trigger_event,
-            ],
-            'client' => $this->clientContext($client),
-            'reactivation' => [
-                'inactive_days' => $lastEngagementAt->diffInDays($now),
-                'last_visit_at' => $lastEngagementAt->toIso8601String(),
-                'last_visit_at_local' => $localizedLastEngagement->format('d/m/Y H:i'),
-                'completed_visits' => $this->clientCompletedVisits($client),
-            ],
-        ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function clientContext(?Client $client): array
-    {
-        return [
-            'id' => $client?->id,
-            'full_name' => $client?->full_name,
-            'first_name' => $this->firstName($client?->full_name),
-            'phone_e164' => $client?->phone_e164,
-        ];
-    }
-
-    private function firstName(?string $fullName): ?string
-    {
-        if (! is_string($fullName) || trim($fullName) === '') {
-            return null;
-        }
-
-        return trim(explode(' ', trim($fullName))[0]);
     }
 
     /**

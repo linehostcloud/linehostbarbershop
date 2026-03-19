@@ -3,6 +3,8 @@
 namespace App\Infrastructure\Observability;
 
 use App\Application\DTOs\WhatsappProviderHealthSnapshot;
+use App\Domain\Agent\Models\AgentInsight;
+use App\Domain\Agent\Models\AgentRun;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -71,6 +73,64 @@ class WhatsappOperationsViewFactory
             'last_activity_at' => $lastActivityAt,
             'last_validated_at' => $configuration->last_validated_at?->toIso8601String(),
             'updated_at' => $configuration->updated_at?->toIso8601String(),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function agentInsightItem(AgentInsight $insight): array
+    {
+        return [
+            'id' => $insight->id,
+            'type' => $insight->type,
+            'recommendation_type' => $insight->recommendation_type,
+            'status' => $insight->status,
+            'severity' => $insight->severity,
+            'priority' => (int) $insight->priority,
+            'title' => $insight->title,
+            'summary' => $insight->summary,
+            'provider' => $insight->provider,
+            'slot' => $insight->slot,
+            'target_type' => $insight->target_type,
+            'target_id' => $insight->target_id,
+            'target_label' => $insight->target_label,
+            'automation_id' => $insight->automation_id,
+            'suggested_action' => $insight->suggested_action,
+            'execution_mode' => $insight->execution_mode,
+            'execution_result' => $insight->execution_result_json ?? [],
+            'evidence' => $insight->evidence_json ?? [],
+            'first_detected_at' => $insight->first_detected_at?->toIso8601String(),
+            'last_detected_at' => $insight->last_detected_at?->toIso8601String(),
+            'resolved_at' => $insight->resolved_at?->toIso8601String(),
+            'ignored_at' => $insight->ignored_at?->toIso8601String(),
+            'executed_at' => $insight->executed_at?->toIso8601String(),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function agentRunSummary(?AgentRun $run): ?array
+    {
+        if ($run === null) {
+            return null;
+        }
+
+        return [
+            'id' => $run->id,
+            'status' => $run->status,
+            'window_started_at' => $run->window_started_at?->toIso8601String(),
+            'window_ended_at' => $run->window_ended_at?->toIso8601String(),
+            'insights_created' => (int) $run->insights_created,
+            'insights_refreshed' => (int) $run->insights_refreshed,
+            'insights_resolved' => (int) $run->insights_resolved,
+            'insights_ignored' => (int) $run->insights_ignored,
+            'safe_actions_executed' => (int) $run->safe_actions_executed,
+            'failure_reason' => $run->failure_reason,
+            'started_at' => $run->started_at?->toIso8601String(),
+            'completed_at' => $run->completed_at?->toIso8601String(),
+            'result' => $this->sanitizer->sanitize($run->result_json ?? []),
         ];
     }
 
@@ -323,6 +383,12 @@ class WhatsappOperationsViewFactory
             'whatsapp.message.duplicate_risk_detected' => 'duplicate_risk_detected',
             'whatsapp.automation.run.completed' => 'automation_run_completed',
             'whatsapp.automation.run.failed' => 'automation_run_failed',
+            'whatsapp.agent.run.completed' => 'agent_run_completed',
+            'whatsapp.agent.run.failed' => 'agent_run_failed',
+            'whatsapp.agent.insight.created' => 'agent_insight_created',
+            'whatsapp.agent.insight.resolved' => 'agent_insight_resolved',
+            'whatsapp.agent.insight.ignored' => 'agent_insight_ignored',
+            'whatsapp.agent.recommendation.executed' => 'agent_recommendation_executed',
             default => 'outbox_reclaimed',
         };
         $provider = is_string(data_get($eventLog->context_json, 'provider')) && data_get($eventLog->context_json, 'provider') !== ''
@@ -358,6 +424,9 @@ class WhatsappOperationsViewFactory
                 'whatsapp.message.fallback.executed' => 'medium',
                 'whatsapp.automation.run.failed' => 'high',
                 'whatsapp.automation.run.completed' => (int) data_get($eventLog->payload_json, 'failed_total', 0) > 0 ? 'medium' : 'info',
+                'whatsapp.agent.run.failed' => 'high',
+                'whatsapp.agent.insight.created' => (string) data_get($eventLog->payload_json, 'severity', 'medium') === 'high' ? 'high' : 'medium',
+                'whatsapp.agent.recommendation.executed' => 'info',
                 default => 'medium',
             },
             'occurred_at' => $eventLog->occurred_at?->toIso8601String(),
@@ -379,6 +448,17 @@ class WhatsappOperationsViewFactory
                     'Automacao %s falhou durante o processamento.',
                     (string) data_get($eventLog->payload_json, 'automation_type', 'whatsapp'),
                 ),
+                'whatsapp.agent.run.completed' => sprintf(
+                    'Agente operacional concluiu a analise: %d insights criados, %d atualizados e %d resolvidos.',
+                    (int) data_get($eventLog->payload_json, 'insights_created', 0),
+                    (int) data_get($eventLog->payload_json, 'insights_refreshed', 0),
+                    (int) data_get($eventLog->payload_json, 'insights_resolved', 0),
+                ),
+                'whatsapp.agent.run.failed' => 'Agente operacional falhou durante a analise recente.',
+                'whatsapp.agent.insight.created' => (string) data_get($eventLog->payload_json, 'title', 'Insight operacional criado.'),
+                'whatsapp.agent.insight.resolved' => 'Insight do agente foi marcado como resolvido.',
+                'whatsapp.agent.insight.ignored' => 'Insight do agente foi ignorado pela operacao.',
+                'whatsapp.agent.recommendation.executed' => 'Acao segura recomendada pelo agente foi executada.',
                 default => 'Outbox stale recolocado para retry.',
             },
             'details' => [
@@ -386,9 +466,14 @@ class WhatsappOperationsViewFactory
                 'message_id' => $eventLog->message_id,
                 'aggregate_id' => $eventLog->aggregate_id,
                 'automation_id' => $eventLog->automation_id,
+                'agent_run_id' => data_get($eventLog->context_json, 'agent_run_id'),
+                'insight_id' => data_get($eventLog->context_json, 'insight_id'),
+                'insight_type' => data_get($eventLog->payload_json, 'insight_type')
+                    ?? data_get($eventLog->context_json, 'insight_type'),
                 'automation_run_id' => data_get($eventLog->context_json, 'automation_run_id'),
                 'automation_type' => data_get($eventLog->payload_json, 'automation_type')
                     ?? data_get($eventLog->context_json, 'automation_type'),
+                'recommendation_type' => data_get($eventLog->payload_json, 'recommendation_type'),
                 'provider' => $provider,
                 'slot' => $slot,
                 'reason' => $reason !== '' ? $reason : null,
@@ -402,6 +487,11 @@ class WhatsappOperationsViewFactory
                 'messages_queued' => data_get($eventLog->payload_json, 'messages_queued'),
                 'skipped_total' => data_get($eventLog->payload_json, 'skipped_total'),
                 'failed_total' => data_get($eventLog->payload_json, 'failed_total'),
+                'insights_created' => data_get($eventLog->payload_json, 'insights_created'),
+                'insights_refreshed' => data_get($eventLog->payload_json, 'insights_refreshed'),
+                'insights_resolved' => data_get($eventLog->payload_json, 'insights_resolved'),
+                'safe_actions_executed' => data_get($eventLog->payload_json, 'safe_actions_executed'),
+                'suggested_action' => data_get($eventLog->payload_json, 'suggested_action'),
                 'skip_reasons' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'skip_reasons', [])),
                 'failed_reasons' => $this->sanitizer->sanitize(data_get($eventLog->payload_json, 'failed_reasons', [])),
                 'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
