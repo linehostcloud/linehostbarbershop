@@ -1,9 +1,11 @@
 <?php
 
 use App\Http\Controllers\Web\TenantWhatsappAppointmentReminderController;
+use App\Http\Controllers\Web\TenantWhatsappAppointmentConfirmationController;
 use App\Http\Controllers\Web\TenantWhatsappAgentGovernanceController;
 use App\Http\Controllers\Web\TenantWhatsappAutomationGovernanceController;
 use App\Http\Controllers\Web\TenantWhatsappClientReactivationController;
+use App\Http\Controllers\Web\TenantWhatsappClientReactivationSnoozeController;
 use App\Http\Controllers\Web\TenantWhatsappGovernancePanelController;
 use App\Http\Controllers\Web\TenantWhatsappOperationsPanelController;
 use App\Http\Controllers\Web\TenantWhatsappOperationsPanelLoginController;
@@ -37,9 +39,15 @@ Route::middleware('tenant.resolve')->group(function (): void {
     Route::post('/painel/gestao/whatsapp/agendamentos/{appointment}/lembrete', TenantWhatsappAppointmentReminderController::class)
         ->middleware(['tenant.auth', 'tenant.ability:appointments.read', 'tenant.ability:messages.write'])
         ->name('tenant.panel.whatsapp.relationship.appointments.reminder');
+    Route::post('/painel/gestao/whatsapp/agendamentos/{appointment}/confirmacao', TenantWhatsappAppointmentConfirmationController::class)
+        ->middleware(['tenant.auth', 'tenant.ability:appointments.read', 'tenant.ability:messages.write'])
+        ->name('tenant.panel.whatsapp.relationship.appointments.confirmation');
     Route::post('/painel/gestao/whatsapp/clientes/{client}/reativacao', TenantWhatsappClientReactivationController::class)
         ->middleware(['tenant.auth', 'tenant.ability:clients.read', 'tenant.ability:messages.write'])
         ->name('tenant.panel.whatsapp.relationship.clients.reactivation');
+    Route::post('/painel/gestao/whatsapp/clientes/{client}/reativacao/ignorar', TenantWhatsappClientReactivationSnoozeController::class)
+        ->middleware(['tenant.auth', 'tenant.ability:clients.read', 'tenant.ability:messages.write'])
+        ->name('tenant.panel.whatsapp.relationship.clients.reactivation.snooze');
 
     Route::get('/painel/operacoes/whatsapp/governanca', TenantWhatsappGovernancePanelController::class)
         ->middleware('tenant.auth')

@@ -65,7 +65,7 @@ class TenantWhatsappAutomationEngineTest extends TestCase
                 $attempt = IntegrationAttempt::query()->sole();
 
                 $this->assertNotNull($appointment->reminder_sent_at);
-                $this->assertSame('reminder_queued', $appointment->confirmation_status);
+                $this->assertSame('awaiting_customer', $appointment->confirmation_status);
                 $this->assertSame($automationId, $message->automation_id);
                 $this->assertSame($appointmentId, $message->appointment_id);
                 $this->assertSame('dispatched', $message->status);
@@ -170,6 +170,11 @@ class TenantWhatsappAutomationEngineTest extends TestCase
             $appointmentId = $this->createAppointment($tenant, $clientId, $professionalId, $serviceId, '2026-03-19 13:00:00');
 
             $this->artisan('tenancy:process-whatsapp-automations', [
+                '--tenant' => [$tenant->slug],
+                '--limit' => 10,
+            ])->assertExitCode(0);
+
+            $this->artisan('tenancy:process-outbox', [
                 '--tenant' => [$tenant->slug],
                 '--limit' => 10,
             ])->assertExitCode(0);

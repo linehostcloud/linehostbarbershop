@@ -223,6 +223,19 @@ class DiscoverWhatsappAutomationCandidatesAction
             );
         }
 
+        if (($snoozedUntil = $this->clientReactivationSnoozedUntil($client, $now)) !== null) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: 'reactivation_snoozed',
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+            );
+        }
+
         if ($this->cooldownActive($automation, 'client', (string) $client->id, $now)) {
             return new WhatsappAutomationCandidate(
                 status: 'skipped',
@@ -572,6 +585,8 @@ class DiscoverWhatsappAutomationCandidatesAction
                 'last_visit_at' => $lastEngagementAt->toIso8601String(),
                 'last_visit_at_local' => $localizedLastEngagement->format('d/m/Y H:i'),
                 'completed_visits' => $this->clientCompletedVisits($client),
+                'snoozed_until' => $this->clientReactivationSnoozedUntil($client, $now)?->toIso8601String(),
+                'snoozed_until_local' => $this->clientReactivationSnoozedUntil($client, $now)?->setTimezone($timezone)->format('d/m/Y H:i'),
             ],
         ];
     }
@@ -596,5 +611,20 @@ class DiscoverWhatsappAutomationCandidatesAction
         }
 
         return trim(explode(' ', trim($fullName))[0]);
+    }
+
+    private function clientReactivationSnoozedUntil(Client $client, CarbonImmutable $now): ?CarbonImmutable
+    {
+        $value = $client->whatsapp_reactivation_snoozed_until;
+
+        if ($value === null) {
+            return null;
+        }
+
+        $snoozedUntil = $value instanceof CarbonImmutable
+            ? $value
+            : CarbonImmutable::instance($value);
+
+        return $snoozedUntil->greaterThan($now) ? $snoozedUntil : null;
     }
 }

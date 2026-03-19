@@ -23,6 +23,7 @@ class QueueWhatsappAutomationTargetAction
     /**
      * @param  array<string, mixed>  $context
      * @param  array<string, mixed>  $messageMetadata
+     * @param  array<string, mixed>  $messageDefinition
      * @return array{
      *     queued:bool,
      *     failure_reason:string,
@@ -40,6 +41,7 @@ class QueueWhatsappAutomationTargetAction
         ?Appointment $appointment,
         array $context,
         array $messageMetadata = [],
+        array $messageDefinition = [],
         string $triggerSource = 'automation',
     ): array {
         $target = AutomationRunTarget::query()->create([
@@ -56,7 +58,7 @@ class QueueWhatsappAutomationTargetAction
         ]);
 
         try {
-            $rendered = $this->renderMessage->execute($automation, $context);
+            $rendered = $this->renderMessage->execute($automation, $context, $messageDefinition);
             $payloadJson = array_merge($rendered['payload_json'], [
                 'automation' => [
                     'type' => $automation->trigger_event,

@@ -2,12 +2,12 @@
 
 namespace App\Application\Actions\Communication;
 
+use App\Application\Actions\Appointment\DetermineManualAppointmentConfirmationEligibilityAction;
 use App\Application\Actions\Automation\DiscoverWhatsappAutomationCandidatesAction;
 use App\Application\Actions\Automation\EnsureDefaultWhatsappAutomationsAction;
 use App\Domain\Appointment\Models\Appointment;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
-use App\Domain\Client\Models\Client;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Product\WhatsappRelationshipViewFactory;
@@ -18,8 +18,10 @@ use Illuminate\Support\Collection;
 class BuildWhatsappRelationshipPanelDataAction
 {
     public function __construct(
+        private readonly BuildWhatsappRelationshipMetricsAction $buildMetrics,
         private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaults,
         private readonly DiscoverWhatsappAutomationCandidatesAction $discoverCandidates,
+        private readonly DetermineManualAppointmentConfirmationEligibilityAction $determineConfirmationEligibility,
         private readonly WhatsappRelationshipViewFactory $viewFactory,
         private readonly TenantContext $tenantContext,
     ) {
@@ -27,15 +29,24 @@ class BuildWhatsappRelationshipPanelDataAction
 
     /**
      * @param  array<string, mixed>  $filters
+     * @param  array{
+     *     appointments:array{read:bool,write:bool},
+     *     clients:array{read:bool,write:bool}
+     * }  $visibility
      * @return array{
      *     filters:array<string, mixed>,
-     *     cards:list<array<string, mixed>>,
+     *     sections:array{appointments:bool,reactivation:bool},
+     *     metrics:array{
+     *         period:array<string, mixed>,
+     *         cards:list<array<string, mixed>>,
+     *         has_inferred_cards:bool
+     *     },
      *     automations:array<string, array<string, mixed>>,
      *     appointments:list<array<string, mixed>>,
      *     reactivation_clients:list<array<string, mixed>>
      * }
      */
-    public function execute(array $filters, bool $canTriggerManualMessages): array
+    public function execute(array $filters, array $visibility): array
     {
         $tenant = $this->tenantContext->current();
         abort_if(! $tenant instanceof Tenant, 404);
@@ -44,80 +55,103 @@ class BuildWhatsappRelationshipPanelDataAction
         $selectedDate = $this->selectedDate($filters, $tenant);
         $appointmentAutomation = $this->automation(WhatsappAutomationType::AppointmentReminder);
         $reactivationAutomation = $this->automation(WhatsappAutomationType::InactiveClientReactivation);
+        $appointmentItems = [];
+        $reactivationItems = [];
 
-        $appointments = $this->appointmentsForDate($selectedDate);
-        $appointmentMessages = $this->latestMessagesByAppointment($appointments->pluck('id')->all());
+        if (($visibility['appointments']['read'] ?? false) === true) {
+            $appointments = $this->appointmentsForDate($selectedDate);
+            $appointmentMessages = $this->latestAppointmentMessages(
+                appointmentIds: $appointments->pluck('id')->all(),
+                automationId: $appointmentAutomation->id,
+            );
 
-        $appointmentItems = $appointments
-            ->map(function (Appointment $appointment) use (
-                $appointmentAutomation,
-                $appointmentMessages,
-                $tenant,
-                $now,
-                $canTriggerManualMessages,
-            ): array {
-                $candidate = $this->discoverCandidates->inspectAppointmentReminder(
-                    automation: $appointmentAutomation,
-                    appointment: $appointment,
-                    now: $now,
-                );
+            $appointmentItems = $appointments
+                ->map(function (Appointment $appointment) use (
+                    $appointmentAutomation,
+                    $appointmentMessages,
+                    $tenant,
+                    $now,
+                    $visibility,
+                ): array {
+                    $automaticCandidate = $this->discoverCandidates->inspectAppointmentReminder(
+                        automation: $appointmentAutomation,
+                        appointment: $appointment,
+                        now: $now,
+                    );
+                    $manualCandidate = $this->discoverCandidates->inspectAppointmentReminder(
+                        automation: $appointmentAutomation,
+                        appointment: $appointment,
+                        now: $now,
+                        respectWindow: false,
+                        respectAlreadySent: false,
+                    );
+                    $latestConfirmationMessage = $appointmentMessages['confirmation']->get($appointment->id);
+                    $confirmationState = $this->determineConfirmationEligibility->execute(
+                        appointment: $appointment,
+                        latestConfirmationMessage: $latestConfirmationMessage,
+                        now: $now,
+                    );
 
-                return $this->viewFactory->appointmentItem(
-                    appointment: $appointment,
-                    candidate: $candidate,
-                    automation: $appointmentAutomation,
-                    latestMessage: $appointmentMessages->get($appointment->id),
-                    now: $now,
-                    tenant: $tenant,
-                    canSendManualReminder: $canTriggerManualMessages,
-                );
-            })
-            ->values()
-            ->all();
+                    return $this->viewFactory->appointmentItem(
+                        appointment: $appointment,
+                        automaticCandidate: $automaticCandidate,
+                        manualCandidate: $manualCandidate,
+                        automation: $appointmentAutomation,
+                        latestReminderMessage: $appointmentMessages['reminder']->get($appointment->id),
+                        latestConfirmationMessage: $latestConfirmationMessage,
+                        confirmationState: $confirmationState,
+                        now: $now,
+                        tenant: $tenant,
+                        canSendManualReminder: (bool) ($visibility['appointments']['write'] ?? false),
+                        canSendManualConfirmation: (bool) ($visibility['appointments']['write'] ?? false),
+                    );
+                })
+                ->values()
+                ->all();
+        }
 
-        $reactivationCandidates = $this->discoverCandidates
-            ->execute($reactivationAutomation, $now, 20)
-            ->sortByDesc(fn ($candidate) => $candidate->isEligible())
-            ->values();
-        $reactivationMessages = $this->latestMessagesByClientForAutomation(
-            clientIds: $reactivationCandidates->pluck('targetId')->filter()->all(),
-            automationId: $reactivationAutomation->id,
-        );
+        if (($visibility['clients']['read'] ?? false) === true) {
+            $reactivationCandidates = $this->discoverCandidates
+                ->execute($reactivationAutomation, $now, 20)
+                ->sortByDesc(fn ($candidate) => $candidate->isEligible())
+                ->values();
+            $reactivationMessages = $this->latestMessagesByClientForAutomation(
+                clientIds: $reactivationCandidates->pluck('targetId')->filter()->all(),
+                automationId: $reactivationAutomation->id,
+            );
 
-        $reactivationItems = $reactivationCandidates
-            ->map(function ($candidate) use ($reactivationAutomation, $reactivationMessages, $tenant, $canTriggerManualMessages): array {
-                return $this->viewFactory->reactivationClientItem(
-                    candidate: $candidate,
-                    automation: $reactivationAutomation,
-                    latestMessage: $candidate->client !== null ? $reactivationMessages->get($candidate->client->id) : null,
-                    tenant: $tenant,
-                    canTriggerManual: $canTriggerManualMessages,
-                );
-            })
-            ->values()
-            ->all();
-
-        $appointmentSummary = $this->discoverCandidates->summarize(
-            automation: $appointmentAutomation,
-            now: $now,
-            limit: 100,
-        );
-        $reactivationSummary = $this->discoverCandidates->summarize(
-            automation: $reactivationAutomation,
-            now: $now,
-            limit: 100,
-        );
+            $reactivationItems = $reactivationCandidates
+                ->map(function ($candidate) use ($reactivationAutomation, $reactivationMessages, $tenant, $visibility): array {
+                    return $this->viewFactory->reactivationClientItem(
+                        candidate: $candidate,
+                        automation: $reactivationAutomation,
+                        latestMessage: $candidate->client !== null ? $reactivationMessages->get($candidate->client->id) : null,
+                        tenant: $tenant,
+                        canTriggerManual: (bool) ($visibility['clients']['write'] ?? false),
+                    );
+                })
+                ->values()
+                ->all();
+        }
 
         return [
             'filters' => [
                 'date' => $selectedDate->toDateString(),
+                'date_label' => $selectedDate->format('d/m/Y'),
+                'period' => $this->periodFilter($filters['period'] ?? null),
             ],
-            'cards' => $this->viewFactory->dashboardSummary(
+            'sections' => [
+                'appointments' => (bool) ($visibility['appointments']['read'] ?? false),
+                'reactivation' => (bool) ($visibility['clients']['read'] ?? false),
+            ],
+            'metrics' => $this->buildMetrics->execute(
+                tenant: $tenant,
                 appointmentAutomation: $appointmentAutomation,
-                appointmentSummary: $appointmentSummary,
-                remindersSentToday: $this->remindersSentToday($selectedDate),
                 reactivationAutomation: $reactivationAutomation,
-                reactivationSummary: $reactivationSummary,
+                filters: [
+                    'period' => $this->periodFilter($filters['period'] ?? null),
+                ],
+                visibility: $visibility,
             ),
             'automations' => [
                 'appointment_reminder' => [
@@ -134,6 +168,13 @@ class BuildWhatsappRelationshipPanelDataAction
             'appointments' => $appointmentItems,
             'reactivation_clients' => $reactivationItems,
         ];
+    }
+
+    private function periodFilter(mixed $value): string
+    {
+        return in_array($value, ['today', '7d', '30d'], true)
+            ? (string) $value
+            : '7d';
     }
 
     private function automation(WhatsappAutomationType $type): Automation
@@ -171,22 +212,51 @@ class BuildWhatsappRelationshipPanelDataAction
 
     /**
      * @param  list<string>  $appointmentIds
-     * @return Collection<string, Message>
+     * @return array{reminder:Collection<string, Message>,confirmation:Collection<string, Message>}
      */
-    private function latestMessagesByAppointment(array $appointmentIds): Collection
+    private function latestAppointmentMessages(array $appointmentIds, string $automationId): array
     {
         if ($appointmentIds === []) {
-            return collect();
+            return [
+                'reminder' => collect(),
+                'confirmation' => collect(),
+            ];
         }
 
-        return Message::query()
+        $reminder = collect();
+        $confirmation = collect();
+
+        Message::query()
             ->whereIn('appointment_id', $appointmentIds)
+            ->where('automation_id', $automationId)
             ->where('channel', 'whatsapp')
             ->where('direction', 'outbound')
             ->latest('created_at')
             ->get()
-            ->unique('appointment_id')
-            ->keyBy('appointment_id');
+            ->each(function (Message $message) use (&$reminder, &$confirmation): void {
+                $appointmentId = (string) $message->appointment_id;
+
+                if ($appointmentId === '') {
+                    return;
+                }
+
+                if ($this->isConfirmationMessage($message)) {
+                    if (! $confirmation->has($appointmentId)) {
+                        $confirmation->put($appointmentId, $message);
+                    }
+
+                    return;
+                }
+
+                if (! $reminder->has($appointmentId)) {
+                    $reminder->put($appointmentId, $message);
+                }
+            });
+
+        return [
+            'reminder' => $reminder,
+            'confirmation' => $confirmation,
+        ];
     }
 
     /**
@@ -210,10 +280,9 @@ class BuildWhatsappRelationshipPanelDataAction
             ->keyBy('client_id');
     }
 
-    private function remindersSentToday(CarbonImmutable $selectedDate): int
+    private function isConfirmationMessage(Message $message): bool
     {
-        return Appointment::query()
-            ->whereBetween('reminder_sent_at', [$selectedDate, $selectedDate->copy()->endOfDay()])
-            ->count();
+        return data_get($message->payload_json, 'product.manual_action') === 'appointment_confirmation'
+            || data_get($message->payload_json, 'automation.trigger_reason') === 'manual_appointment_confirmation';
     }
 }

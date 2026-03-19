@@ -21,6 +21,7 @@ class QueueManualWhatsappAutomationMessageAction
      * @param  array<string, mixed>  $context
      * @param  array<string, mixed>  $runContext
      * @param  array<string, mixed>  $messageMetadata
+     * @param  array<string, mixed>  $messageDefinition
      * @return array{
      *     queued:bool,
      *     failure_reason:string,
@@ -39,6 +40,7 @@ class QueueManualWhatsappAutomationMessageAction
         array $context,
         array $runContext = [],
         array $messageMetadata = [],
+        array $messageDefinition = [],
     ): array {
         $now = CarbonImmutable::now();
         $run = AutomationRun::query()->create([
@@ -65,6 +67,7 @@ class QueueManualWhatsappAutomationMessageAction
             appointment: $appointment,
             context: $context,
             messageMetadata: $messageMetadata,
+            messageDefinition: $messageDefinition,
             triggerSource: 'product_panel',
         );
 

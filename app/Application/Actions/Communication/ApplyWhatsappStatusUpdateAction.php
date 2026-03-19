@@ -2,6 +2,7 @@
 
 namespace App\Application\Actions\Communication;
 
+use App\Domain\Appointment\Models\Appointment;
 use App\Domain\Communication\Data\ProviderErrorData;
 use App\Domain\Communication\Enums\WhatsappMessageStatus;
 use App\Domain\Communication\Models\Message;
@@ -69,7 +70,97 @@ class ApplyWhatsappStatusUpdateAction
         }
 
         $message->forceFill($attributes)->save();
+        $this->syncAppointmentCommunicationState($message, $incomingStatus, $occurredAt);
 
         return $message->refresh();
+    }
+
+    private function syncAppointmentCommunicationState(
+        Message $message,
+        WhatsappMessageStatus $incomingStatus,
+        CarbonImmutable $occurredAt,
+    ): void {
+        if ($message->direction !== 'outbound' || $message->appointment_id === null) {
+            return;
+        }
+
+        $manualAction = data_get($message->payload_json, 'product.manual_action');
+
+        /** @var Appointment|null $appointment */
+        $appointment = $message->appointment()->first();
+
+        if (! $appointment instanceof Appointment) {
+            return;
+        }
+
+        if ($manualAction === 'appointment_confirmation') {
+            $this->syncAppointmentConfirmationState($appointment, $incomingStatus);
+
+            return;
+        }
+
+        $automationType = data_get($message->payload_json, 'automation.type');
+
+        if (! is_string($automationType) || $automationType === '') {
+            $message->loadMissing('automation');
+            $automationType = $message->automation?->trigger_event;
+        }
+
+        if ($automationType !== 'appointment_reminder') {
+            return;
+        }
+
+        $updates = [];
+
+        if (in_array($incomingStatus, [
+            WhatsappMessageStatus::Dispatched,
+            WhatsappMessageStatus::Sent,
+            WhatsappMessageStatus::Delivered,
+            WhatsappMessageStatus::Read,
+        ], true)) {
+            if ($appointment->reminder_sent_at === null) {
+                $updates['reminder_sent_at'] = $occurredAt;
+            }
+
+            if (in_array((string) $appointment->confirmation_status, ['', 'not_sent', 'reminder_queued'], true)) {
+                $updates['confirmation_status'] = 'awaiting_customer';
+            }
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $appointment->forceFill($updates)->save();
+    }
+
+    private function syncAppointmentConfirmationState(
+        Appointment $appointment,
+        WhatsappMessageStatus $incomingStatus,
+    ): void {
+        $currentStatus = (string) $appointment->confirmation_status;
+        $updates = [];
+
+        if (in_array($incomingStatus, [
+            WhatsappMessageStatus::Dispatched,
+            WhatsappMessageStatus::Sent,
+            WhatsappMessageStatus::Delivered,
+            WhatsappMessageStatus::Read,
+        ], true) && in_array($currentStatus, ['not_sent', 'confirm_queued', 'confirm_failed', 'manual_confirmation_requested'], true)) {
+            $updates['confirmation_status'] = 'awaiting_customer';
+        }
+
+        if (
+            $incomingStatus === WhatsappMessageStatus::Failed
+            && in_array($currentStatus, ['not_sent', 'confirm_queued', 'awaiting_customer', 'confirm_failed', 'manual_confirmation_requested'], true)
+        ) {
+            $updates['confirmation_status'] = 'confirm_failed';
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $appointment->forceFill($updates)->save();
     }
 }

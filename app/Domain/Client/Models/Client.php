@@ -34,6 +34,7 @@ class Client extends TenantModel
         'retention_status',
         'last_visit_at',
         'inactive_since',
+        'whatsapp_reactivation_snoozed_until',
     ];
 
     protected function casts(): array
@@ -44,6 +45,7 @@ class Client extends TenantModel
             'whatsapp_opt_in' => 'boolean',
             'last_visit_at' => 'datetime',
             'inactive_since' => 'datetime',
+            'whatsapp_reactivation_snoozed_until' => 'datetime',
         ];
     }
 

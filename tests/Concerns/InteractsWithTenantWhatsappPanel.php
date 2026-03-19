@@ -70,11 +70,25 @@ trait InteractsWithTenantWhatsappPanel
         return sprintf('http://%s/painel/gestao/whatsapp/agendamentos/%s/lembrete', $domain, $appointmentId);
     }
 
+    private function panelRelationshipAppointmentConfirmationUrl(Tenant $tenant, string $appointmentId): string
+    {
+        $domain = $tenant->domains()->value('domain');
+
+        return sprintf('http://%s/painel/gestao/whatsapp/agendamentos/%s/confirmacao', $domain, $appointmentId);
+    }
+
     private function panelRelationshipClientReactivationUrl(Tenant $tenant, string $clientId): string
     {
         $domain = $tenant->domains()->value('domain');
 
         return sprintf('http://%s/painel/gestao/whatsapp/clientes/%s/reativacao', $domain, $clientId);
+    }
+
+    private function panelRelationshipClientReactivationSnoozeUrl(Tenant $tenant, string $clientId): string
+    {
+        $domain = $tenant->domains()->value('domain');
+
+        return sprintf('http://%s/painel/gestao/whatsapp/clientes/%s/reativacao/ignorar', $domain, $clientId);
     }
 
     private function panelLoginUrl(Tenant $tenant): string

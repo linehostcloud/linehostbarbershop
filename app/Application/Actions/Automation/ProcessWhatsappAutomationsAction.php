@@ -292,12 +292,6 @@ class ProcessWhatsappAutomationsAction
 
             if ($result['queued']) {
                 $summary['messages_queued']++;
-
-                $candidate->appointment?->forceFill([
-                    'reminder_sent_at' => now(),
-                    'confirmation_status' => 'reminder_queued',
-                ])->save();
-
                 continue;
             }
 

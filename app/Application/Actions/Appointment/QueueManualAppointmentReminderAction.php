@@ -82,11 +82,6 @@ class QueueManualAppointmentReminderAction
             ]);
         }
 
-        $appointment->forceFill([
-            'reminder_sent_at' => now(),
-            'confirmation_status' => 'reminder_queued',
-        ])->save();
-
         return [
             'automation' => $automation,
             'message' => $result['message'],

@@ -8,11 +8,17 @@ class RenderWhatsappAutomationMessageAction
 {
     /**
      * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $definitionOverride
      * @return array{type:string,body_text:?string,payload_json:array<string, mixed>,provider:?string}
      */
-    public function execute(Automation $automation, array $context): array
+    public function execute(Automation $automation, array $context, array $definitionOverride = []): array
     {
         $definition = is_array($automation->action_payload_json) ? $automation->action_payload_json : [];
+
+        if ($definitionOverride !== []) {
+            $definition = array_replace_recursive($definition, $definitionOverride);
+        }
+
         $renderedPayload = $this->renderValue($definition['payload_json'] ?? [], $context);
         $renderedBody = $this->renderValue($definition['body_text'] ?? null, $context);
         $renderedProvider = $this->renderValue($definition['provider'] ?? null, $context);

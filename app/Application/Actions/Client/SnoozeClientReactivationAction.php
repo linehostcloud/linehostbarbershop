@@ -4,28 +4,25 @@ namespace App\Application\Actions\Client;
 
 use App\Application\Actions\Automation\DiscoverWhatsappAutomationCandidatesAction;
 use App\Application\Actions\Automation\EnsureDefaultWhatsappAutomationsAction;
-use App\Application\Actions\Automation\QueueManualWhatsappAutomationMessageAction;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
 use App\Domain\Client\Models\Client;
-use App\Domain\Communication\Models\Message;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Validation\ValidationException;
 
-class QueueManualClientReactivationAction
+class SnoozeClientReactivationAction
 {
     public function __construct(
         private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaults,
         private readonly DiscoverWhatsappAutomationCandidatesAction $discoverCandidates,
-        private readonly QueueManualWhatsappAutomationMessageAction $queueManualMessage,
     ) {
     }
 
     /**
-     * @return array{automation:Automation,message:Message,run_id:string}
+     * @return array{automation:Automation,snoozed_until:CarbonImmutable,days:int}
      */
-    public function execute(Client $client, ?string $actorUserId = null): array
+    public function execute(Client $client): array
     {
         $automation = $this->automation();
         $now = CarbonImmutable::now();
@@ -34,7 +31,7 @@ class QueueManualClientReactivationAction
             $client = $this->discoverCandidates->loadClientForReactivation($client, $now);
         } catch (ModelNotFoundException) {
             throw ValidationException::withMessages([
-                'client' => 'Esse cliente não está elegível para reativação manual agora.',
+                'client' => 'Esse cliente não precisa ser ignorado temporariamente agora.',
             ]);
         }
 
@@ -46,43 +43,24 @@ class QueueManualClientReactivationAction
 
         if (! $candidate->isEligible()) {
             throw ValidationException::withMessages([
-                'client' => $this->manualBlockMessage($candidate->skipReason),
+                'client' => $this->manualBlockMessage(
+                    skipReason: $candidate->skipReason,
+                    snoozedUntilLocal: data_get($candidate->context, 'reactivation.snoozed_until_local'),
+                ),
             ]);
         }
 
-        $result = $this->queueManualMessage->execute(
-            automation: $automation,
-            targetType: 'client',
-            targetId: (string) $client->id,
-            triggerReason: 'manual_client_reactivation',
-            client: $client,
-            appointment: null,
-            context: $candidate->context,
-            runContext: [
-                'actor_user_id' => $actorUserId,
-                'client_id' => $client->id,
-            ],
-            messageMetadata: [
-                'product' => [
-                    'surface' => 'manager_relationship_panel',
-                    'manual_action' => 'client_reactivation',
-                    'actor_user_id' => $actorUserId,
-                ],
-            ],
-        );
+        $days = max(1, (int) config('communication.whatsapp.product_flows.client_reactivation_snooze.days', 7));
+        $snoozedUntil = $now->addDays($days);
 
-        if (! $result['queued'] || ! $result['message'] instanceof Message) {
-            throw ValidationException::withMessages([
-                'client' => $result['failure_reason'] !== ''
-                    ? $result['failure_reason']
-                    : 'Não foi possível acionar a reativação agora.',
-            ]);
-        }
+        $client->forceFill([
+            'whatsapp_reactivation_snoozed_until' => $snoozedUntil,
+        ])->save();
 
         return [
             'automation' => $automation,
-            'message' => $result['message'],
-            'run_id' => $result['run']->id,
+            'snoozed_until' => $snoozedUntil,
+            'days' => $days,
         ];
     }
 
@@ -96,19 +74,20 @@ class QueueManualClientReactivationAction
                 ->firstOrFail();
     }
 
-    private function manualBlockMessage(?string $skipReason): string
+    private function manualBlockMessage(?string $skipReason, ?string $snoozedUntilLocal = null): string
     {
         return match ($skipReason) {
-            'no_visit_history' => 'Esse cliente ainda não tem histórico suficiente para reativação.',
+            'reactivation_snoozed' => $snoozedUntilLocal !== null && $snoozedUntilLocal !== ''
+                ? sprintf('Esse cliente já está ignorado temporariamente até %s.', $snoozedUntilLocal)
+                : 'Esse cliente já está ignorado temporariamente para reativação.',
+            'no_visit_history', 'insufficient_history' => 'Esse cliente ainda não tem histórico suficiente para reativação.',
             'missing_phone' => 'O cliente ainda não possui telefone válido para WhatsApp.',
             'whatsapp_opt_out' => 'O cliente não autorizou contato por WhatsApp.',
             'marketing_opt_out' => 'O cliente não autorizou comunicações de reativação.',
-            'insufficient_history' => 'Esse cliente ainda não tem histórico suficiente para reativação.',
             'future_appointment_exists' => 'Esse cliente já tem um novo agendamento e não precisa de reativação agora.',
             'not_inactive_enough' => 'Esse cliente ainda não atingiu a janela de inatividade configurada.',
-            'reactivation_snoozed' => 'Esse cliente está ignorado temporariamente para reativação.',
             'cooldown_active' => 'Já existe uma reativação recente para esse cliente. Aguarde a próxima janela.',
-            default => 'Esse cliente não está elegível para reativação manual agora.',
+            default => 'Esse cliente não precisa ser ignorado temporariamente agora.',
         };
     }
 }

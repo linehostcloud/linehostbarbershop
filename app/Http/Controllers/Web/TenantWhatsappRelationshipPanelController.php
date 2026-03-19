@@ -26,9 +26,12 @@ class TenantWhatsappRelationshipPanelController extends Controller
         abort_if($tenant === null || $user === null || $membership === null, 404);
 
         $permissions = [
-            'relationship' => [
-                'read' => $permissionMatrix->hasAbility($membership, 'appointments.read')
-                    || $permissionMatrix->hasAbility($membership, 'clients.read'),
+            'appointments' => [
+                'read' => $permissionMatrix->hasAbility($membership, 'appointments.read'),
+                'write' => $permissionMatrix->hasAbility($membership, 'messages.write'),
+            ],
+            'clients' => [
+                'read' => $permissionMatrix->hasAbility($membership, 'clients.read'),
                 'write' => $permissionMatrix->hasAbility($membership, 'messages.write'),
             ],
             'operations' => [
@@ -40,7 +43,7 @@ class TenantWhatsappRelationshipPanelController extends Controller
             ],
         ];
 
-        abort_unless($permissions['relationship']['read'], 403);
+        abort_unless($permissions['appointments']['read'] || $permissions['clients']['read'], 403);
 
         return view('tenant.panel.whatsapp.relationship', [
             'tenant' => $tenant,
@@ -50,14 +53,24 @@ class TenantWhatsappRelationshipPanelController extends Controller
             'panel' => $buildPanelData->execute(
                 filters: [
                     'date' => (string) $request->query('date', ''),
+                    'period' => (string) $request->query('period', ''),
                 ],
-                canTriggerManualMessages: $permissions['relationship']['write'],
+                visibility: [
+                    'appointments' => [
+                        'read' => $permissions['appointments']['read'],
+                        'write' => $permissions['appointments']['read'] && $permissions['appointments']['write'],
+                    ],
+                    'clients' => [
+                        'read' => $permissions['clients']['read'],
+                        'write' => $permissions['clients']['read'] && $permissions['clients']['write'],
+                    ],
+                ],
             ),
             'navigation' => [
                 'relationship_url' => route('tenant.panel.whatsapp.relationship'),
                 'operations_url' => route('tenant.panel.whatsapp.operations'),
                 'governance_url' => route('tenant.panel.whatsapp.governance'),
-                'can_view_relationship' => $permissions['relationship']['read'],
+                'can_view_relationship' => $permissions['appointments']['read'] || $permissions['clients']['read'],
                 'can_view_operations' => $permissions['operations']['read'],
                 'can_view_governance' => $permissions['governance']['read'],
                 'active' => 'relationship',

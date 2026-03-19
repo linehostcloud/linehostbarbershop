@@ -39,6 +39,18 @@ return [
                 ],
             ],
         ],
+        'product_flows' => [
+            'appointment_confirmation' => [
+                'message' => [
+                    'type' => 'text',
+                    'body_text' => 'Oi {{client.first_name}}, seu agendamento em {{appointment.starts_at_local}} está confirmado? Se precisar ajustar o horário, responda esta mensagem.',
+                    'payload_json' => [],
+                ],
+            ],
+            'client_reactivation_snooze' => [
+                'days' => (int) env('WHATSAPP_PRODUCT_CLIENT_REACTIVATION_SNOOZE_DAYS', 7),
+            ],
+        ],
         'agent' => [
             'window_minutes' => (int) env('WHATSAPP_AGENT_WINDOW_MINUTES', 120),
             'provider_signal_alert_threshold' => (int) env('WHATSAPP_AGENT_PROVIDER_SIGNAL_ALERT_THRESHOLD', 2),
