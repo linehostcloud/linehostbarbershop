@@ -500,6 +500,20 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                 rows: [],
             },
             {
+                title: 'Duplicados bloqueados',
+                value: cards.duplicate_prevented_total || 0,
+                tone: Number(cards.duplicate_prevented_total || 0) > 0 ? 'slate' : 'emerald',
+                caption: 'Deduplicacao bloqueou reenvios logicos com sucesso conhecido.',
+                rows: [],
+            },
+            {
+                title: 'Risco de duplicidade',
+                value: cards.duplicate_risk_total || 0,
+                tone: Number(cards.duplicate_risk_total || 0) > 0 ? 'amber' : 'emerald',
+                caption: 'Timeout ou erro transiente com risco real de duplo envio.',
+                rows: [],
+            },
+            {
                 title: 'Boundary rejections',
                 value: cards.boundary_rejections_total || 0,
                 tone: Number(cards.boundary_rejections_total || 0) > 0 ? 'rose' : 'emerald',
@@ -607,6 +621,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                         <div class="rounded-2xl border border-stone-200 bg-white px-4 py-3">
                             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ultimos Sinais</p>
                             <dl class="mt-3 space-y-2 text-sm">
+                                ${providerDetailRow('Janela de saude', item.health_window?.label || state.window)}
                                 ${providerDetailRow('Healthcheck', healthcheckText(item.last_healthcheck))}
                                 ${providerDetailRow('Ultima atividade', formatDateTime(item.last_activity_at))}
                                 ${providerDetailRow('Ultima validacao', formatDateTime(item.last_validated_at))}
@@ -836,6 +851,7 @@ function bootstrapWhatsappOperationsPanel(rootElement, bootNode) {
                                     ${item.error_code ? badge(item.error_code, errorTone(item.error_code)) : ''}
                                     ${item.provider ? badge(item.provider, 'slate') : ''}
                                     ${item.slot ? badge(item.slot, 'stone') : ''}
+                                    ${item.decision_source ? badge(`rota ${item.decision_source}`, 'stone') : ''}
                                 </div>
 
                                 <p class="mt-3 text-sm font-medium leading-6 text-slate-950">${e(item.message || 'Evento operacional')}</p>
@@ -1223,12 +1239,14 @@ function typeTone(type) {
         case 'provider_fallback_scheduled':
         case 'provider_fallback_executed':
         case 'outbox_reclaimed':
+        case 'duplicate_risk_detected':
             return 'amber';
         case 'terminal_failure':
         case 'boundary_rejection':
         case 'manual_review_required':
         case 'provider_config_deactivated':
             return 'rose';
+        case 'duplicate_prevented':
         case 'provider_healthcheck':
         case 'provider_config_activated':
             return 'slate';
@@ -1351,6 +1369,10 @@ function queueOperationalNote(item) {
     const details = item?.details || {};
     const notes = [];
 
+    if (details.decision_reason) {
+        notes.push(`decisao ${details.decision_reason}`);
+    }
+
     if (details.last_reclaim_reason) {
         notes.push(`reclaim ${details.last_reclaim_reason}`);
     }
@@ -1365,6 +1387,18 @@ function queueOperationalNote(item) {
 
     if (details.http_status) {
         notes.push(`HTTP ${details.http_status}`);
+    }
+
+    if (item?.duplicate_prevented || details.duplicate_prevented) {
+        notes.push('duplicado bloqueado');
+    }
+
+    if (item?.duplicate_risk || details.duplicate_risk) {
+        notes.push('risco de duplicidade');
+    }
+
+    if (details.deduplication_key) {
+        notes.push(`dedup ${shortReference(details.deduplication_key)}`);
     }
 
     return notes.join(' · ');
@@ -1409,6 +1443,14 @@ function feedSecondaryLine(item) {
     const details = item?.details || {};
     const notes = [];
 
+    if (details.provider_decision_source || item?.decision_source) {
+        notes.push(`rota ${details.provider_decision_source || item.decision_source}`);
+    }
+
+    if (details.decision_reason) {
+        notes.push(`decisao ${details.decision_reason}`);
+    }
+
     if (details.reason) {
         notes.push(`motivo ${details.reason}`);
     }
@@ -1419,6 +1461,18 @@ function feedSecondaryLine(item) {
 
     if (details.provider_error_code) {
         notes.push(`provider code ${details.provider_error_code}`);
+    }
+
+    if (details.duplicate_prevented || item?.duplicate_prevented) {
+        notes.push('duplicado bloqueado');
+    }
+
+    if (details.duplicate_risk || item?.duplicate_risk) {
+        notes.push('risco de duplicidade');
+    }
+
+    if (details.deduplication_key) {
+        notes.push(`dedup ${shortReference(details.deduplication_key)}`);
     }
 
     if (Array.isArray(details.result)) {

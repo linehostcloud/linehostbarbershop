@@ -133,6 +133,9 @@ class ProcessOutboxEventAction
                         'integration_attempt_id' => $result['integration_attempt_id'] ?? null,
                         'provider' => $result['provider'] ?? null,
                         'provider_slot' => $result['provider_slot'] ?? null,
+                        'provider_decision_source' => $result['provider_decision_source'] ?? data_get($freshEvent->context_json, 'whatsapp_dispatch.provider_decision_source'),
+                        'decision_reason' => $result['decision_reason'] ?? data_get($freshEvent->context_json, 'whatsapp_dispatch.decision_reason'),
+                        'deduplication_key' => $result['deduplication_key'] ?? data_get($freshEvent->context_json, 'whatsapp_dispatch.deduplication_key'),
                         'fallback' => $result['fallback'],
                     ],
                     occurredAt: $freshEvent->processed_at ?? now(),
@@ -183,6 +186,9 @@ class ProcessOutboxEventAction
                 'result_json' => array_filter([
                     'error' => $throwable->getMessage(),
                     'next_retry_at' => $nextAttemptAt?->toIso8601String(),
+                    'dispatch' => is_array(data_get($freshEvent->context_json, 'whatsapp_dispatch'))
+                        ? data_get($freshEvent->context_json, 'whatsapp_dispatch')
+                        : null,
                     'fallback' => $fallbackDecision !== null
                         ? array_merge($fallbackDecision->toArray(), [
                             'scheduled_at' => data_get($context, 'whatsapp_fallback.scheduled_at'),
@@ -203,6 +209,11 @@ class ProcessOutboxEventAction
                         'message_id' => $freshEvent->message_id,
                         'outbox_event_id' => $freshEvent->id,
                         'retry_at' => $nextAttemptAt?->toIso8601String(),
+                        'provider' => data_get($context, 'whatsapp_dispatch.provider'),
+                        'provider_slot' => data_get($context, 'whatsapp_dispatch.provider_slot'),
+                        'provider_decision_source' => data_get($context, 'whatsapp_dispatch.provider_decision_source'),
+                        'decision_reason' => data_get($context, 'whatsapp_dispatch.decision_reason'),
+                        'deduplication_key' => data_get($context, 'whatsapp_dispatch.deduplication_key'),
                         'fallback' => data_get($context, 'whatsapp_fallback'),
                     ],
                     occurredAt: now(),

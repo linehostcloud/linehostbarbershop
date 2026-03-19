@@ -6,10 +6,10 @@
     @php
         $windows = (array) config('observability.whatsapp_operations.allowed_windows', ['24h', '7d', '30d']);
         $futureSignals = [
-            ['label' => 'Deduplicacao', 'description' => 'duplicate risk, duplicate prevented e deduplication key.'],
-            ['label' => 'Health Window', 'description' => 'janela de saude consolidada e tendencia por provider.'],
-            ['label' => 'Smart Routing', 'description' => 'motivo da decisao operacional e caminho escolhido.'],
-            ['label' => 'Decision Source', 'description' => 'primary, fallback, health-based ou manual override.'],
+            ['label' => 'Deduplicacao', 'description' => 'duplicate risk, duplicate prevented e deduplication key agora expostos no feed e na fila.'],
+            ['label' => 'Health Window', 'description' => 'janela de saude consolidada por provider, calculada no backend operacional.'],
+            ['label' => 'Smart Routing', 'description' => 'motivo da decisao operacional e caminho escolhido antes do dispatch.'],
+            ['label' => 'Decision Source', 'description' => 'primary_default, health_based_secondary, fallback_pinned ou manual_override.'],
         ];
     @endphp
 
@@ -127,8 +127,8 @@
 
         <section class="rounded-3xl border border-stone-200 bg-white/95 px-5 py-4 shadow-[0_16px_44px_-28px_rgba(15,23,42,0.35)] backdrop-blur">
             <div class="mb-3">
-                <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Preparado Para Proxima Etapa</h2>
-                <p class="mt-1 text-sm text-slate-600">Espacos reservados para sinais futuros, sem inventar dado enquanto o backend ainda nao expuser o contrato final.</p>
+                <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Camada Deterministica</h2>
+                <p class="mt-1 text-sm text-slate-600">Sinais de deduplicacao, health e roteamento que ja saem do backend prontos para leitura operacional, sem heuristica escondida no frontend.</p>
             </div>
 
             <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -136,7 +136,7 @@
                     <article class="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-4">
                         <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{{ $signal['label'] }}</p>
                         <p class="mt-2 text-sm leading-6 text-slate-600">{{ $signal['description'] }}</p>
-                        <p class="mt-3 text-xs font-medium text-slate-500">Aguardando exposicao dedicada no backend operacional.</p>
+                        <p class="mt-3 text-xs font-medium text-slate-500">Leitura alimentada pela API operacional consolidada.</p>
                     </article>
                 @endforeach
             </div>
@@ -238,6 +238,8 @@
                             <option value="">Todos</option>
                             <option value="provider_fallback_scheduled">provider_fallback_scheduled</option>
                             <option value="provider_fallback_executed">provider_fallback_executed</option>
+                            <option value="duplicate_prevented">duplicate_prevented</option>
+                            <option value="duplicate_risk_detected">duplicate_risk_detected</option>
                             <option value="terminal_failure">terminal_failure</option>
                             <option value="boundary_rejection">boundary_rejection</option>
                             <option value="manual_review_required">manual_review_required</option>

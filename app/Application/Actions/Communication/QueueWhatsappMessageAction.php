@@ -7,6 +7,7 @@ use App\Domain\Client\Models\Client;
 use App\Domain\Communication\Models\Message;
 use App\Infrastructure\Integration\Whatsapp\TenantWhatsappProviderResolver;
 use App\Infrastructure\Integration\Whatsapp\WhatsappDispatchCapabilityGuard;
+use App\Infrastructure\Tenancy\TenantContext;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -16,6 +17,8 @@ class QueueWhatsappMessageAction
         private readonly RecordEventLogAction $recordEventLog,
         private readonly TenantWhatsappProviderResolver $providerResolver,
         private readonly WhatsappDispatchCapabilityGuard $capabilityGuard,
+        private readonly GenerateWhatsappMessageDeduplicationKeyAction $generateDeduplicationKey,
+        private readonly TenantContext $tenantContext,
     ) {}
 
     /**
@@ -26,6 +29,7 @@ class QueueWhatsappMessageAction
         $client = Client::query()->findOrFail($payload['client_id']);
         $connection = config('tenancy.tenant_connection', 'tenant');
         $resolvedProvider = $this->providerResolver->resolveForOutbound($payload['provider'] ?? null);
+        $tenantId = (string) $this->tenantContext->current()?->id;
         $type = (string) ($payload['type'] ?? 'text');
 
         if (! in_array($type, ['text', 'template', 'media'], true)) {
@@ -39,9 +43,15 @@ class QueueWhatsappMessageAction
             $capability,
         );
 
-        $message = DB::connection($connection)->transaction(function () use ($client, $payload, $resolvedProvider, $type) {
+        $message = DB::connection($connection)->transaction(function () use ($client, $payload, $resolvedProvider, $tenantId, $type) {
             $provider = $resolvedProvider->configuration->provider;
             $retryProfile = $resolvedProvider->configuration->retryProfile();
+            $deduplication = $this->generateDeduplicationKey->execute(
+                tenantId: $tenantId,
+                client: $client,
+                payload: $payload,
+                type: $type,
+            );
 
             $message = Message::query()->create([
                 'client_id' => $client->id,
@@ -51,12 +61,24 @@ class QueueWhatsappMessageAction
                 'direction' => 'outbound',
                 'channel' => 'whatsapp',
                 'provider' => $provider,
+                'deduplication_key' => $deduplication['key'],
                 'thread_key' => $payload['thread_key'] ?? $client->phone_e164 ?? $client->id,
                 'type' => $type,
                 'status' => 'queued',
                 'body_text' => $payload['body_text'],
                 'payload_json' => array_merge($payload['payload_json'] ?? [], [
+                    'requested_provider' => is_string($payload['provider'] ?? null) && $payload['provider'] !== ''
+                        ? (string) $payload['provider']
+                        : null,
                     'provider_slot' => $resolvedProvider->configuration->slot,
+                    'deduplication' => [
+                        'key' => $deduplication['key'],
+                        'window_started_at' => $deduplication['window_started_at'],
+                        'window_ended_at' => $deduplication['window_ended_at'],
+                        'window_minutes' => $deduplication['window_minutes'],
+                        'duplicate_prevented' => false,
+                        'duplicate_risk_detected' => false,
+                    ],
                 ]),
             ]);
 
@@ -71,6 +93,7 @@ class QueueWhatsappMessageAction
                     'appointment_id' => $message->appointment_id,
                     'automation_id' => $message->automation_id,
                     'provider' => $provider,
+                    'deduplication_key' => $message->deduplication_key,
                     'thread_key' => $message->thread_key,
                     'type' => $message->type,
                     'body_text' => $message->body_text,
@@ -78,6 +101,8 @@ class QueueWhatsappMessageAction
                 context: [
                     'channel' => 'whatsapp',
                     'direction' => 'outbound',
+                    'provider' => $provider,
+                    'provider_slot' => $resolvedProvider->configuration->slot,
                 ],
                 messageId: $message->id,
                 automationId: $message->automation_id,

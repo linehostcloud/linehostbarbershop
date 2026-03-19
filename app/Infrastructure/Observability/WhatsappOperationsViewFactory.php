@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Observability;
 
+use App\Application\DTOs\WhatsappProviderHealthSnapshot;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -20,19 +21,11 @@ class WhatsappOperationsViewFactory
 
     /**
      * @param  array<string, mixed>|null  $lastHealthcheck
-     * @param  array<int, array{code:string,total:int}>  $topErrorCodes
      * @return array<string, mixed>
      */
     public function providerHealth(
         WhatsappProviderConfig $configuration,
-        int $sendAttemptsTotal,
-        int $successAttempts,
-        int $failureAttempts,
-        int $retryScheduledTotal,
-        int $fallbackScheduledTotal,
-        int $fallbackExecutedTotal,
-        array $signalTotals,
-        array $topErrorCodes,
+        WhatsappProviderHealthSnapshot $healthSnapshot,
         ?array $lastHealthcheck,
         ?string $lastActivityAt,
     ): array {
@@ -41,31 +34,40 @@ class WhatsappOperationsViewFactory
             'provider' => $configuration->provider,
             'enabled' => (bool) $configuration->enabled,
             'enabled_capabilities' => $configuration->enabledCapabilities(),
+            'health_window' => [
+                'label' => $healthSnapshot->window->label,
+                'started_at' => $healthSnapshot->window->startedAt->toIso8601String(),
+                'ended_at' => $healthSnapshot->window->endedAt->toIso8601String(),
+            ],
             'last_healthcheck' => $lastHealthcheck,
-            'send_attempts_total' => $sendAttemptsTotal,
-            'success_attempts' => $successAttempts,
-            'failure_attempts' => $failureAttempts,
-            'retry_scheduled_total' => $retryScheduledTotal,
-            'fallback_scheduled_total' => $fallbackScheduledTotal,
-            'fallback_executed_total' => $fallbackExecutedTotal,
-            'success_rate' => $sendAttemptsTotal > 0
-                ? round(($successAttempts / $sendAttemptsTotal) * 100, 2)
-                : 0.0,
-            'failure_rate' => $sendAttemptsTotal > 0
-                ? round(($failureAttempts / $sendAttemptsTotal) * 100, 2)
-                : 0.0,
-            'signal_totals' => $signalTotals,
-            'top_error_codes' => $topErrorCodes,
-            'operational_state' => $this->providerOperationalState(
-                configuration: $configuration,
-                sendAttemptsTotal: $sendAttemptsTotal,
-                failureAttempts: $failureAttempts,
-                retryScheduledTotal: $retryScheduledTotal,
-                fallbackScheduledTotal: $fallbackScheduledTotal,
-                fallbackExecutedTotal: $fallbackExecutedTotal,
-                signalTotals: $signalTotals,
-                lastHealthcheck: $lastHealthcheck,
-            ),
+            'send_attempts_total' => $healthSnapshot->sendAttemptsTotal,
+            'success_attempts' => $healthSnapshot->successesRecent,
+            'failure_attempts' => $healthSnapshot->failuresRecent,
+            'retry_scheduled_total' => $healthSnapshot->retriesRecent,
+            'fallback_scheduled_total' => $healthSnapshot->fallbackScheduledTotal,
+            'fallback_executed_total' => $healthSnapshot->fallbackExecutedTotal,
+            'successes_recent' => $healthSnapshot->successesRecent,
+            'failures_recent' => $healthSnapshot->failuresRecent,
+            'retries_recent' => $healthSnapshot->retriesRecent,
+            'fallbacks_recent' => $healthSnapshot->fallbacksRecent,
+            'timeout_recent' => $healthSnapshot->timeoutRecent,
+            'rate_limit_recent' => $healthSnapshot->rateLimitRecent,
+            'unavailable_recent' => $healthSnapshot->unavailableRecent,
+            'transient_recent' => $healthSnapshot->transientRecent,
+            'success_rate' => $healthSnapshot->successRate(),
+            'failure_rate' => $healthSnapshot->failureRate(),
+            'signal_totals' => $healthSnapshot->signalTotals,
+            'top_error_codes' => $healthSnapshot->topErrorCodes,
+            'operational_state' => [
+                'label' => $healthSnapshot->stateLabel,
+                'tone' => match ($healthSnapshot->stateLabel) {
+                    'healthy' => 'emerald',
+                    'unavailable' => 'rose',
+                    default => 'amber',
+                },
+                'reason' => $healthSnapshot->stateReason,
+                'healthy' => $healthSnapshot->isHealthy(),
+            ],
             'last_activity_at' => $lastActivityAt,
             'last_validated_at' => $configuration->last_validated_at?->toIso8601String(),
             'updated_at' => $configuration->updated_at?->toIso8601String(),
@@ -101,6 +103,12 @@ class WhatsappOperationsViewFactory
         $message = $outboxEvent->message;
         $slot = $this->slotFromMessage($message) ?? $this->slotFromOutbox($outboxEvent);
         $fallback = $this->sanitizeFallback(data_get($outboxEvent->context_json, 'whatsapp_fallback'));
+        $decisionSource = $this->decisionSource(
+            data_get($outboxEvent->context_json, 'whatsapp_dispatch.provider_decision_source'),
+            data_get($message?->payload_json ?? [], 'provider_decision_source'),
+            $fallback,
+            $slot,
+        );
 
         return [
             'source' => 'outbox_event',
@@ -117,8 +125,10 @@ class WhatsappOperationsViewFactory
             'message_id' => $outboxEvent->message_id,
             'outbox_event_id' => $outboxEvent->id,
             'integration_attempt_id' => null,
-            'decision_source' => $fallback !== null ? 'fallback' : ($slot ?? 'unknown'),
+            'decision_source' => $decisionSource,
             'fallback' => $fallback,
+            'duplicate_prevented' => (bool) data_get($message?->payload_json ?? [], 'deduplication.duplicate_prevented', false),
+            'duplicate_risk' => (bool) data_get($message?->payload_json ?? [], 'deduplication.duplicate_risk_detected', false),
             'event_name' => $outboxEvent->event_name,
             'summary' => $outboxEvent->failure_reason ?: $outboxEvent->last_reclaim_reason ?: 'Item de outbox exige atencao operacional.',
             'details' => [
@@ -128,6 +138,9 @@ class WhatsappOperationsViewFactory
                 'last_reclaim_reason' => $outboxEvent->last_reclaim_reason,
                 'last_reclaimed_at' => $outboxEvent->last_reclaimed_at?->toIso8601String(),
                 'failed_at' => $outboxEvent->failed_at?->toIso8601String(),
+                'decision_reason' => data_get($outboxEvent->context_json, 'whatsapp_dispatch.decision_reason')
+                    ?? data_get($message?->payload_json ?? [], 'decision_reason'),
+                'deduplication_key' => $message?->deduplication_key,
             ],
         ];
     }
@@ -138,6 +151,12 @@ class WhatsappOperationsViewFactory
     public function queueMessageItem(Message $message): array
     {
         $fallback = $this->sanitizeFallback(data_get($message->payload_json, 'fallback'));
+        $decisionSource = $this->decisionSource(
+            data_get($message->payload_json, 'provider_decision_source'),
+            null,
+            $fallback,
+            $this->slotFromMessage($message),
+        );
 
         return [
             'source' => 'message',
@@ -151,14 +170,18 @@ class WhatsappOperationsViewFactory
             'message_id' => $message->id,
             'outbox_event_id' => null,
             'integration_attempt_id' => null,
-            'decision_source' => $fallback !== null ? 'fallback' : ($this->slotFromMessage($message) ?? 'unknown'),
+            'decision_source' => $decisionSource,
             'fallback' => $fallback,
+            'duplicate_prevented' => (bool) data_get($message->payload_json, 'deduplication.duplicate_prevented', false),
+            'duplicate_risk' => (bool) data_get($message->payload_json, 'deduplication.duplicate_risk_detected', false),
             'event_name' => 'message.failed',
             'summary' => $message->failure_reason ?: 'Mensagem com falha terminal.',
             'details' => [
                 'type' => $message->type,
                 'failed_at' => $message->failed_at?->toIso8601String(),
                 'external_message_id' => $message->external_message_id,
+                'decision_reason' => data_get($message->payload_json, 'decision_reason'),
+                'deduplication_key' => $message->deduplication_key,
             ],
         ];
     }
@@ -175,6 +198,15 @@ class WhatsappOperationsViewFactory
         $activeFallback = is_array(data_get($attempt->response_payload_json, 'active_fallback'))
             ? $this->sanitizer->sanitize((array) data_get($attempt->response_payload_json, 'active_fallback'))
             : null;
+        $duplicateRisk = is_array(data_get($attempt->response_payload_json, 'duplicate_risk'))
+            ? $this->sanitizer->sanitize((array) data_get($attempt->response_payload_json, 'duplicate_risk'))
+            : null;
+        $decisionSource = $this->decisionSource(
+            data_get($attempt->request_payload_json, 'provider_decision_source'),
+            data_get($attempt->response_payload_json, 'provider_decision_source'),
+            $activeFallback ?? $plannedFallback,
+            $this->slotFromMessage($message),
+        );
 
         return [
             'source' => 'integration_attempt',
@@ -192,12 +224,14 @@ class WhatsappOperationsViewFactory
             'message_id' => $attempt->message_id,
             'outbox_event_id' => $attempt->outbox_event_id,
             'integration_attempt_id' => $attempt->id,
-            'decision_source' => $activeFallback !== null || $plannedFallback !== null
-                ? 'fallback'
-                : ($this->slotFromMessage($message) ?? 'unknown'),
+            'decision_source' => $decisionSource,
             'fallback' => $activeFallback ?? $plannedFallback,
+            'duplicate_prevented' => (bool) data_get($attempt->response_payload_json, 'duplicate_prevented', false),
+            'duplicate_risk' => $duplicateRisk !== null,
             'event_name' => 'integration_attempt.issue',
-            'summary' => $attempt->failure_reason ?: 'Tentativa de integracao exige atencao operacional.',
+            'summary' => $attempt->status === 'duplicate_prevented'
+                ? 'Envio duplicado bloqueado antes do dispatch efetivo.'
+                : ($attempt->failure_reason ?: 'Tentativa de integracao exige atencao operacional.'),
             'details' => [
                 'operation' => $attempt->operation,
                 'direction' => $attempt->direction,
@@ -206,6 +240,11 @@ class WhatsappOperationsViewFactory
                 'retryable' => $attempt->retryable,
                 'provider_error_code' => $attempt->provider_error_code,
                 'provider_status' => $attempt->provider_status,
+                'decision_reason' => data_get($attempt->request_payload_json, 'decision_reason')
+                    ?? data_get($attempt->response_payload_json, 'decision_reason'),
+                'deduplication_key' => data_get($attempt->request_payload_json, 'deduplication_key')
+                    ?? $message?->deduplication_key,
+                'duplicate_risk' => $duplicateRisk,
                 'planned_fallback' => $plannedFallback,
                 'active_fallback' => $activeFallback,
             ],
@@ -233,6 +272,7 @@ class WhatsappOperationsViewFactory
             },
             'provider' => $provider,
             'slot' => $slot,
+            'decision_source' => null,
             'status' => $action === 'whatsapp_provider_config.healthcheck_requested'
                 ? ((bool) data_get($result, 'healthy') ? 'healthy' : 'unhealthy')
                 : null,
@@ -269,6 +309,8 @@ class WhatsappOperationsViewFactory
             'outbox.event.reclaim.blocked' => 'manual_review_required',
             'whatsapp.message.fallback.scheduled' => 'provider_fallback_scheduled',
             'whatsapp.message.fallback.executed' => 'provider_fallback_executed',
+            'whatsapp.message.duplicate_prevented' => 'duplicate_prevented',
+            'whatsapp.message.duplicate_risk_detected' => 'duplicate_risk_detected',
             default => 'outbox_reclaimed',
         };
         $provider = is_string(data_get($eventLog->context_json, 'provider')) && data_get($eventLog->context_json, 'provider') !== ''
@@ -283,13 +325,24 @@ class WhatsappOperationsViewFactory
             'type' => $type,
             'provider' => $provider,
             'slot' => $slot,
+            'decision_source' => $this->decisionSource(
+                data_get($eventLog->payload_json, 'provider_decision_source'),
+                data_get($eventLog->context_json, 'provider_decision_source'),
+                is_array(data_get($eventLog->payload_json, 'fallback'))
+                    ? $this->sanitizer->sanitize((array) data_get($eventLog->payload_json, 'fallback'))
+                    : null,
+                $slot,
+            ),
             'status' => $eventLog->status,
             'error_code' => is_string(data_get($eventLog->payload_json, 'fallback.trigger_error_code'))
                 ? (string) data_get($eventLog->payload_json, 'fallback.trigger_error_code')
-                : null,
+                : (is_string(data_get($eventLog->payload_json, 'risk_error_code'))
+                    ? (string) data_get($eventLog->payload_json, 'risk_error_code')
+                    : null),
             'direction' => null,
             'severity' => match ($eventLog->event_name) {
                 'outbox.event.reclaim.blocked' => 'high',
+                'whatsapp.message.duplicate_risk_detected' => 'medium',
                 'whatsapp.message.fallback.executed' => 'medium',
                 default => 'medium',
             },
@@ -299,6 +352,8 @@ class WhatsappOperationsViewFactory
                 'outbox.event.reclaim.blocked' => 'Reclaim automatico bloqueado; revisao manual exigida.',
                 'whatsapp.message.fallback.scheduled' => 'Fallback controlado agendado para o provider secundario.',
                 'whatsapp.message.fallback.executed' => 'Fallback controlado executado no provider secundario.',
+                'whatsapp.message.duplicate_prevented' => 'Envio duplicado bloqueado antes do dispatch efetivo.',
+                'whatsapp.message.duplicate_risk_detected' => 'Risco de duplicidade detectado apos erro transitório no provider.',
                 default => 'Outbox stale recolocado para retry.',
             },
             'details' => [
@@ -308,6 +363,12 @@ class WhatsappOperationsViewFactory
                 'provider' => $provider,
                 'slot' => $slot,
                 'reason' => $reason !== '' ? $reason : null,
+                'provider_decision_source' => data_get($eventLog->payload_json, 'provider_decision_source')
+                    ?? data_get($eventLog->context_json, 'provider_decision_source'),
+                'decision_reason' => data_get($eventLog->payload_json, 'decision_reason'),
+                'deduplication_key' => data_get($eventLog->payload_json, 'deduplication_key'),
+                'duplicate_prevented' => (bool) data_get($eventLog->payload_json, 'duplicate_prevented', false),
+                'duplicate_risk' => (bool) data_get($eventLog->payload_json, 'duplicate_risk_detected', false),
                 'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
                 'result' => $this->sanitizer->sanitize($eventLog->result_json ?? []),
             ],
@@ -324,6 +385,7 @@ class WhatsappOperationsViewFactory
             'type' => 'boundary_rejection',
             'provider' => $audit->provider,
             'slot' => $audit->slot,
+            'decision_source' => null,
             'status' => null,
             'error_code' => $audit->code,
             'direction' => $audit->direction,
@@ -346,11 +408,25 @@ class WhatsappOperationsViewFactory
      */
     public function feedIntegrationAttemptItem(IntegrationAttempt $attempt): array
     {
+        $message = $attempt->message;
+        $duplicateRisk = is_array(data_get($attempt->response_payload_json, 'duplicate_risk'))
+            ? $this->sanitizer->sanitize((array) data_get($attempt->response_payload_json, 'duplicate_risk'))
+            : null;
+        $decisionSource = $this->decisionSource(
+            data_get($attempt->request_payload_json, 'provider_decision_source'),
+            data_get($attempt->response_payload_json, 'provider_decision_source'),
+            is_array(data_get($attempt->response_payload_json, 'active_fallback'))
+                ? $this->sanitizer->sanitize((array) data_get($attempt->response_payload_json, 'active_fallback'))
+                : null,
+            $this->slotFromMessage($message),
+        );
+
         return [
             'source' => 'integration_attempt',
             'type' => 'terminal_failure',
             'provider' => $attempt->provider,
-            'slot' => $this->slotFromMessage($attempt->message),
+            'slot' => $this->slotFromMessage($message),
+            'decision_source' => $decisionSource,
             'status' => $attempt->status,
             'error_code' => $attempt->normalized_error_code,
             'direction' => $attempt->direction,
@@ -366,7 +442,15 @@ class WhatsappOperationsViewFactory
                 'operation' => $attempt->operation,
                 'http_status' => $attempt->http_status,
                 'provider_error_code' => $attempt->provider_error_code,
-                'slot' => $this->slotFromMessage($attempt->message),
+                'slot' => $this->slotFromMessage($message),
+                'provider_decision_source' => data_get($attempt->request_payload_json, 'provider_decision_source')
+                    ?? data_get($attempt->response_payload_json, 'provider_decision_source'),
+                'decision_reason' => data_get($attempt->request_payload_json, 'decision_reason')
+                    ?? data_get($attempt->response_payload_json, 'decision_reason'),
+                'deduplication_key' => data_get($attempt->request_payload_json, 'deduplication_key')
+                    ?? $message?->deduplication_key,
+                'duplicate_prevented' => (bool) data_get($attempt->response_payload_json, 'duplicate_prevented', false),
+                'duplicate_risk' => $duplicateRisk,
             ],
         ];
     }
@@ -403,92 +487,24 @@ class WhatsappOperationsViewFactory
         return is_string($slot) && $slot !== '' ? $slot : null;
     }
 
-    /**
-     * @param  array<int, array{code:string,total:int}>  $signalTotals
-     * @param  array<string, mixed>|null  $lastHealthcheck
-     * @return array<string, string|bool|null>
-     */
-    private function providerOperationalState(
-        WhatsappProviderConfig $configuration,
-        int $sendAttemptsTotal,
-        int $failureAttempts,
-        int $retryScheduledTotal,
-        int $fallbackScheduledTotal,
-        int $fallbackExecutedTotal,
-        array $signalTotals,
-        ?array $lastHealthcheck,
-    ): array {
-        $healthFailed = $lastHealthcheck !== null && ! (bool) ($lastHealthcheck['healthy'] ?? false);
-        $failureRate = $sendAttemptsTotal > 0
-            ? ($failureAttempts / $sendAttemptsTotal) * 100
-            : 0.0;
-        $hasUnavailableSignal = $this->signalPresent($signalTotals, 'provider_unavailable');
-        $hasTimeoutSignal = $this->signalPresent($signalTotals, 'timeout_error');
-        $hasRateLimitSignal = $this->signalPresent($signalTotals, 'rate_limit');
-        $hasTransientSignal = $this->signalPresent($signalTotals, 'transient_network_error');
-
-        if (! $configuration->enabled) {
-            return [
-                'label' => 'disabled',
-                'tone' => 'stone',
-                'reason' => 'Provider desabilitado administrativamente.',
-                'healthy' => false,
-            ];
-        }
-
-        if ($healthFailed && $hasUnavailableSignal && $failureAttempts > 0) {
-            return [
-                'label' => 'unavailable',
-                'tone' => 'rose',
-                'reason' => 'Healthcheck ruim com indisponibilidade recente do provider.',
-                'healthy' => false,
-            ];
-        }
-
-        if (
-            $healthFailed
-            || $failureRate >= 60
-            || $fallbackScheduledTotal > 0
-            || $fallbackExecutedTotal > 0
-            || $retryScheduledTotal >= 3
-        ) {
-            return [
-                'label' => 'unstable',
-                'tone' => 'amber',
-                'reason' => 'Ha sinais recentes de retry, fallback ou degradacao operacional.',
-                'healthy' => false,
-            ];
-        }
-
-        if ($failureAttempts > 0 || $retryScheduledTotal > 0 || $hasTimeoutSignal || $hasRateLimitSignal || $hasTransientSignal) {
-            return [
-                'label' => 'degraded',
-                'tone' => 'amber',
-                'reason' => 'Ha falhas recentes, mas o provider segue operando.',
-                'healthy' => true,
-            ];
-        }
-
-        return [
-            'label' => 'healthy',
-            'tone' => 'emerald',
-            'reason' => 'Sem sinais relevantes de falha na janela observada.',
-            'healthy' => true,
-        ];
-    }
-
-    /**
-     * @param  array<int, array{code:string,total:int}>  $signalTotals
-     */
-    private function signalPresent(array $signalTotals, string $code): bool
+    private function decisionSource(
+        mixed $primarySource,
+        mixed $secondarySource,
+        ?array $fallback,
+        ?string $slot,
+    ): string
     {
-        foreach ($signalTotals as $signal) {
-            if (($signal['code'] ?? null) === $code && (int) ($signal['total'] ?? 0) > 0) {
-                return true;
+        foreach ([$primarySource, $secondarySource] as $source) {
+            if (is_string($source) && $source !== '') {
+                return $source;
             }
         }
 
-        return false;
+        if ($fallback !== null) {
+            return 'fallback_pinned';
+        }
+
+        return $slot ?? 'unknown';
     }
 
     /**

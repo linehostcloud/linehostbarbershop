@@ -42,10 +42,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             password: 'password123',
         );
 
-        $loginResponse = $this->post($this->panelLoginUrl($tenant), [
-            'email' => $user->email,
-            'password' => 'password123',
-        ]);
+        $loginResponse = $this->postPanelLogin($tenant, $user->email, 'password123');
         $panelCookie = $this->cookieValue($loginResponse, (string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'));
 
         $this->assertNotNull($panelCookie);
@@ -59,7 +56,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('Mensageria WhatsApp')
             ->assertSee('Resumo Operacional')
             ->assertSee('Saude por Provider')
-            ->assertSee('Preparado Para Proxima Etapa')
+            ->assertSee('Camada Deterministica')
             ->assertSee('Exige Atencao Agora')
             ->assertSee('Fila Operacional')
             ->assertSee('Boundary Rejections')
@@ -101,13 +98,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         $this->assertNotNull($csrfToken);
         $this->assertNotNull($sessionCookie);
 
-        $loginResponse = $this
-            ->withUnencryptedCookie($sessionCookieName, (string) $sessionCookie)
-            ->post($this->panelLocalBrowserLoginUrl($tenant), [
-                '_token' => $csrfToken,
-                'email' => $user->email,
-                'password' => 'password123',
-            ]);
+        $loginResponse = $this->postPanelLogin($tenant, $user->email, 'password123', localBrowser: true);
         $panelCookie = $this->cookieValue($loginResponse, $cookieName);
 
         $loginResponse
@@ -146,6 +137,8 @@ class TenantWhatsappOperationsPanelTest extends TestCase
                         'retry_scheduled_total',
                         'fallback_scheduled_total',
                         'fallback_executed_total',
+                        'duplicate_prevented_total',
+                        'duplicate_risk_total',
                         'boundary_rejections_total',
                         'pending_queue_total',
                     ],
@@ -181,10 +174,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             password: 'password123',
         );
 
-        $this->post($this->panelLoginUrl($tenant), [
-            'email' => $user->email,
-            'password' => 'password123',
-        ])
+        $this->postPanelLogin($tenant, $user->email, 'password123')
             ->assertForbidden()
             ->assertSee('Sem permissao para o painel operacional');
     }
@@ -213,10 +203,8 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             'enabled' => true,
         ]);
 
-        $loginResponse = $this->post($this->panelLoginUrl($tenant), [
-            'email' => $user->email,
-            'password' => 'password123',
-        ])->assertRedirect($this->panelUrl($tenant));
+        $loginResponse = $this->postPanelLogin($tenant, $user->email, 'password123')
+            ->assertRedirect($this->panelUrl($tenant));
 
         $panelCookie = $this->cookieValue($loginResponse, (string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'));
 
@@ -235,7 +223,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections/summary', false)
             ->assertSee('/api/v1/operations/whatsapp/boundary-rejections', false)
             ->assertSee('/api/v1/operations/whatsapp/feed', false)
-            ->assertSee('Preparado Para Proxima Etapa')
+            ->assertSee('Camada Deterministica')
             ->assertSee('Smart Routing')
             ->assertDontSee('panel-super-secret-token')
             ->assertDontSee('panel-verify-secret')
@@ -322,6 +310,35 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         }
 
         return $matches[1] ?? null;
+    }
+
+    private function postPanelLogin(
+        Tenant $tenant,
+        string $email,
+        string $password,
+        bool $localBrowser = false,
+    ): \Illuminate\Testing\TestResponse {
+        $loginUrl = $localBrowser
+            ? $this->panelLocalBrowserLoginUrl($tenant)
+            : $this->panelLoginUrl($tenant);
+        $sessionCookieName = (string) config('session.cookie');
+        $loginPage = $this->get($loginUrl);
+
+        $loginPage->assertOk();
+
+        $csrfToken = $this->extractCsrfToken((string) $loginPage->getContent());
+        $sessionCookie = $this->cookieValue($loginPage, $sessionCookieName);
+
+        $this->assertNotNull($csrfToken);
+        $this->assertNotNull($sessionCookie);
+
+        return $this
+            ->withUnencryptedCookie($sessionCookieName, (string) $sessionCookie)
+            ->post($loginUrl, [
+                '_token' => $csrfToken,
+                'email' => $email,
+                'password' => $password,
+            ]);
     }
 
 

@@ -29,6 +29,7 @@ class Message extends TenantModel
         'channel',
         'provider',
         'external_message_id',
+        'deduplication_key',
         'thread_key',
         'type',
         'status',

@@ -114,12 +114,14 @@ class WhatsappMessageStateMachine
                 WhatsappMessageStatus::Read,
             ],
             WhatsappMessageStatus::Read->value => [],
+            WhatsappMessageStatus::DuplicatePrevented->value => [],
             WhatsappMessageStatus::Failed->value => [
                 WhatsappMessageStatus::Queued,
                 WhatsappMessageStatus::Dispatched,
                 WhatsappMessageStatus::Sent,
                 WhatsappMessageStatus::Delivered,
                 WhatsappMessageStatus::Read,
+                WhatsappMessageStatus::DuplicatePrevented,
             ],
         ];
 
@@ -156,6 +158,7 @@ class WhatsappMessageStateMachine
                 WhatsappMessageStatus::Sent,
                 WhatsappMessageStatus::Delivered,
                 WhatsappMessageStatus::Read,
+                WhatsappMessageStatus::DuplicatePrevented,
                 WhatsappMessageStatus::Failed,
             ], true),
         };

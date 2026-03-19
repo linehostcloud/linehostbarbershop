@@ -121,7 +121,7 @@ class TenantObservabilityApiTest extends TestCase
             $this->assertSame('transient_network_error', $attempt->normalized_error_code);
         });
 
-        Carbon::setTestNow(now()->addSeconds(2));
+        Carbon::setTestNow(now()->addSeconds((int) config('observability.outbox.default_retry_backoff_seconds', 60)));
 
         try {
             $this->artisan('tenancy:process-outbox', [

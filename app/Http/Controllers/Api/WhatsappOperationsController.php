@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Application\Actions\Communication\CalculateWhatsappProviderHealthAction;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -78,6 +79,7 @@ class WhatsappOperationsController extends Controller
         $outboxStatusMap = $this->pairsToMap($outboxStatusTotals, 'status');
         $attemptStatusMap = $this->pairsToMap($attemptStatusTotals, 'status');
         $fallbackEventMetrics = $this->fallbackEventMetrics($window, $providerFilter);
+        $duplicateEventMetrics = $this->duplicateEventMetrics($window, $providerFilter);
         $attemptTotal = array_sum(array_values($attemptStatusMap));
         $operationalFailuresTotal = $this->sumBuckets($attemptStatusMap, ['failed', 'retry_scheduled', 'fallback_scheduled']);
         $pendingQueueTotal = $this->sumBuckets($outboxStatusMap, ['pending', 'processing', 'retry_scheduled']);
@@ -94,6 +96,8 @@ class WhatsappOperationsController extends Controller
                     'retry_scheduled_total' => (int) ($attemptStatusMap['retry_scheduled'] ?? 0),
                     'fallback_scheduled_total' => (int) ($attemptStatusMap['fallback_scheduled'] ?? 0),
                     'fallback_executed_total' => (int) ($fallbackEventMetrics['totals']['executed'] ?? 0),
+                    'duplicate_prevented_total' => (int) ($attemptStatusMap['duplicate_prevented'] ?? 0),
+                    'duplicate_risk_total' => (int) ($duplicateEventMetrics['totals']['risk_detected'] ?? 0),
                     'boundary_rejections_total' => $boundaryTotal,
                     'pending_queue_total' => $pendingQueueTotal,
                     'operational_failure_rate' => $this->percentage($operationalFailuresTotal, $attemptTotal),
@@ -123,10 +127,10 @@ class WhatsappOperationsController extends Controller
         WhatsappOperationalQueryRequest $request,
         TenantContext $tenantContext,
         WhatsappOperationsViewFactory $viewFactory,
+        CalculateWhatsappProviderHealthAction $calculateProviderHealth,
     ): JsonResponse {
         $tenantId = $this->currentTenantId($tenantContext);
         $window = $request->window();
-        $topErrorLimit = (int) config('observability.whatsapp_operations.default_top_error_codes_limit', 5);
         $providerFilter = $this->resolvedProviderFilter($request);
 
         $configurations = WhatsappProviderConfig::query()
@@ -134,102 +138,6 @@ class WhatsappOperationsController extends Controller
             ->when($request->filled('slot'), fn (Builder $query): Builder => $query->where('slot', (string) $request->string('slot')))
             ->orderByRaw("case when slot = 'primary' then 0 else 1 end")
             ->get();
-
-        $providers = $configurations
-            ->pluck('provider')
-            ->filter(fn (?string $provider): bool => is_string($provider) && $provider !== '')
-            ->unique()
-            ->values()
-            ->all();
-
-        $attemptMetrics = [];
-        $attemptStatusCounts = [];
-        $lastAttemptAt = [];
-        $topErrors = [];
-        $signalTotals = [];
-
-        if ($providers !== []) {
-            $attemptRows = IntegrationAttempt::query()
-                ->where('channel', 'whatsapp')
-                ->where('operation', 'send_message')
-                ->where('direction', 'outbound')
-                ->whereIn('provider', $providers)
-                ->whereBetween('created_at', [$window->startedAt, $window->endedAt])
-                ->selectRaw("
-                    provider,
-                    COUNT(*) as total,
-                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as succeeded,
-                    SUM(CASE WHEN status IN ('failed', 'retry_scheduled', 'fallback_scheduled') THEN 1 ELSE 0 END) as failed,
-                    MAX(created_at) as last_attempt_at
-                ")
-                ->groupBy('provider')
-                ->get();
-
-            foreach ($attemptRows as $row) {
-                $attemptMetrics[(string) $row->provider] = [
-                    'total' => (int) $row->total,
-                    'succeeded' => (int) $row->succeeded,
-                    'failed' => (int) $row->failed,
-                ];
-                $lastAttemptAt[(string) $row->provider] = $row->last_attempt_at;
-            }
-
-            $statusRows = IntegrationAttempt::query()
-                ->where('channel', 'whatsapp')
-                ->where('operation', 'send_message')
-                ->where('direction', 'outbound')
-                ->whereIn('provider', $providers)
-                ->whereBetween('created_at', [$window->startedAt, $window->endedAt])
-                ->selectRaw('provider, status, COUNT(*) as total')
-                ->groupBy('provider', 'status')
-                ->get();
-
-            foreach ($statusRows as $row) {
-                $attemptStatusCounts[(string) $row->provider][(string) $row->status] = (int) $row->total;
-            }
-
-            $errorRows = IntegrationAttempt::query()
-                ->where('channel', 'whatsapp')
-                ->where('operation', 'send_message')
-                ->where('direction', 'outbound')
-                ->whereIn('provider', $providers)
-                ->whereBetween('created_at', [$window->startedAt, $window->endedAt])
-                ->whereNotNull('normalized_error_code')
-                ->selectRaw('provider, normalized_error_code, COUNT(*) as total')
-                ->groupBy('provider', 'normalized_error_code')
-                ->orderBy('provider')
-                ->orderByDesc('total')
-                ->get();
-
-            foreach ($errorRows as $row) {
-                $provider = (string) $row->provider;
-                $errorCode = (string) $row->normalized_error_code;
-
-                if (count($topErrors[$provider] ?? []) >= $topErrorLimit) {
-                    if (! $this->isOperationalSignal($errorCode)) {
-                        continue;
-                    }
-                }
-
-                if (count($topErrors[$provider] ?? []) < $topErrorLimit) {
-                    $topErrors[$provider][] = [
-                        'code' => $errorCode,
-                        'total' => (int) $row->total,
-                    ];
-                }
-
-                if (! $this->isOperationalSignal($errorCode)) {
-                    continue;
-                }
-
-                $signalTotals[$provider][] = [
-                    'code' => $errorCode,
-                    'total' => (int) $row->total,
-                ];
-            }
-        }
-
-        $fallbackEventMetrics = $this->fallbackEventMetrics($window, $providerFilter);
 
         $healthcheckAudits = AuditLog::query()
             ->where('tenant_id', $tenantId)
@@ -291,26 +199,15 @@ class WhatsappOperationsController extends Controller
 
         foreach ($configurations as $configuration) {
             $provider = (string) $configuration->provider;
-            $metrics = $attemptMetrics[$provider] ?? [
-                'total' => 0,
-                'succeeded' => 0,
-                'failed' => 0,
-            ];
             $key = sprintf('%s|%s', $configuration->slot, $provider);
+            $healthSnapshot = $calculateProviderHealth->execute($configuration, $window);
 
             $data[] = $viewFactory->providerHealth(
                 configuration: $configuration,
-                sendAttemptsTotal: $metrics['total'],
-                successAttempts: $metrics['succeeded'],
-                failureAttempts: $metrics['failed'],
-                retryScheduledTotal: (int) data_get($attemptStatusCounts, $provider.'.retry_scheduled', 0),
-                fallbackScheduledTotal: (int) data_get($attemptStatusCounts, $provider.'.fallback_scheduled', 0),
-                fallbackExecutedTotal: (int) data_get($fallbackEventMetrics, 'by_provider.'.$provider.'.executed', 0),
-                signalTotals: $signalTotals[$provider] ?? [],
-                topErrorCodes: $topErrors[$provider] ?? [],
+                healthSnapshot: $healthSnapshot,
                 lastHealthcheck: $latestHealthchecks[$key] ?? null,
                 lastActivityAt: $this->latestTimestamp([
-                    $lastAttemptAt[$provider] ?? null,
+                    $healthSnapshot->lastAttemptAt,
                     $latestBoundaryActivity[$provider] ?? null,
                     $latestAuditActivity[$key] ?? null,
                 ]),
@@ -599,6 +496,8 @@ class WhatsappOperationsController extends Controller
             'manual_review_required',
             'provider_fallback_scheduled',
             'provider_fallback_executed',
+            'duplicate_prevented',
+            'duplicate_risk_detected',
         ])) {
             $query = EventLog::query()
                 ->with('message')
@@ -997,6 +896,48 @@ class WhatsappOperationsController extends Controller
         ];
     }
 
+    /**
+     * @return array{
+     *     totals: array{prevented:int,risk_detected:int}
+     * }
+     */
+    private function duplicateEventMetrics(\App\Application\DTOs\OperationalWindow $window, ?string $providerFilter = null): array
+    {
+        $query = EventLog::query()
+            ->whereIn('event_name', [
+                'whatsapp.message.duplicate_prevented',
+                'whatsapp.message.duplicate_risk_detected',
+            ])
+            ->whereBetween('occurred_at', [$window->startedAt, $window->endedAt]);
+
+        if ($providerFilter !== null) {
+            $query->where(function (Builder $query) use ($providerFilter): void {
+                $query
+                    ->whereHas('message', fn (Builder $messageQuery): Builder => $messageQuery->where('provider', $providerFilter))
+                    ->orWhere('context_json->provider', $providerFilter);
+            });
+        }
+
+        $totals = [
+            'prevented' => 0,
+            'risk_detected' => 0,
+        ];
+
+        foreach ($query->get() as $event) {
+            if ($event->event_name === 'whatsapp.message.duplicate_prevented') {
+                $totals['prevented']++;
+            }
+
+            if ($event->event_name === 'whatsapp.message.duplicate_risk_detected') {
+                $totals['risk_detected']++;
+            }
+        }
+
+        return [
+            'totals' => $totals,
+        ];
+    }
+
     private function isOperationalSignal(string $errorCode): bool
     {
         return in_array($errorCode, $this->monitoredAttemptErrorCodes(), true);
@@ -1061,11 +1002,15 @@ class WhatsappOperationsController extends Controller
             'manual_review_required' => ['outbox.event.reclaim.blocked'],
             'provider_fallback_scheduled' => ['whatsapp.message.fallback.scheduled'],
             'provider_fallback_executed' => ['whatsapp.message.fallback.executed'],
+            'duplicate_prevented' => ['whatsapp.message.duplicate_prevented'],
+            'duplicate_risk_detected' => ['whatsapp.message.duplicate_risk_detected'],
             default => [
                 'outbox.event.reclaimed',
                 'outbox.event.reclaim.blocked',
                 'whatsapp.message.fallback.scheduled',
                 'whatsapp.message.fallback.executed',
+                'whatsapp.message.duplicate_prevented',
+                'whatsapp.message.duplicate_risk_detected',
             ],
         };
     }

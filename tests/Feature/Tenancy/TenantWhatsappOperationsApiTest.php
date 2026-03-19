@@ -42,6 +42,19 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'failure_reason' => 'Falha terminal.',
             'updated_at' => '2026-03-19 08:30:00',
         ]);
+        $messageDuplicateId = $this->createMessage($tenant, [
+            'provider' => 'fake',
+            'status' => 'duplicate_prevented',
+            'deduplication_key' => 'dedup-summary-1',
+            'payload_json' => [
+                'provider_slot' => 'primary',
+                'deduplication' => [
+                    'key' => 'dedup-summary-1',
+                    'duplicate_prevented' => true,
+                ],
+            ],
+            'updated_at' => '2026-03-19 08:32:00',
+        ]);
         $this->createMessage($tenant, [
             'channel' => 'email',
             'provider' => 'smtp',
@@ -83,6 +96,16 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'request_payload_json' => ['authorization' => 'Bearer summary-secret-token'],
         ]);
         $this->createIntegrationAttempt($tenant, [
+            'message_id' => $messageDuplicateId,
+            'provider' => 'fake',
+            'status' => 'duplicate_prevented',
+            'normalized_status' => 'duplicate_prevented',
+            'created_at' => '2026-03-19 08:32:00',
+            'response_payload_json' => [
+                'duplicate_prevented' => true,
+            ],
+        ]);
+        $this->createIntegrationAttempt($tenant, [
             'channel' => 'email',
             'provider' => 'smtp',
             'operation' => 'send_message',
@@ -108,6 +131,21 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'code' => 'payload_validation_failed',
             'occurred_at' => '2026-03-19 08:50:00',
         ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageFailedId,
+            'event_name' => 'whatsapp.message.duplicate_risk_detected',
+            'status' => 'processed',
+            'payload_json' => [
+                'duplicate_risk_detected' => true,
+                'risk_error_code' => 'timeout_error',
+                'deduplication_key' => 'dedup-summary-1',
+            ],
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'occurred_at' => '2026-03-19 08:36:00',
+        ]);
 
         $response = $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'))
             ->getJson($this->tenantUrl($tenant, '/operations/whatsapp/summary', [
@@ -119,9 +157,9 @@ class TenantWhatsappOperationsApiTest extends TestCase
 
         $data = $response->json('data');
 
-        $this->assertSame(2, $data['messages']['total']);
+        $this->assertSame(3, $data['messages']['total']);
         $this->assertSame(
-            ['delivered' => 1, 'failed' => 1],
+            ['delivered' => 1, 'duplicate_prevented' => 1, 'failed' => 1],
             $this->totalsByKey($data['messages']['status_totals'], 'status'),
         );
         $this->assertSame(
@@ -129,7 +167,7 @@ class TenantWhatsappOperationsApiTest extends TestCase
             $this->totalsByKey($data['outbox_events']['status_totals'], 'status'),
         );
         $this->assertSame(
-            ['failed' => 1, 'succeeded' => 1],
+            ['duplicate_prevented' => 1, 'failed' => 1, 'succeeded' => 1],
             $this->totalsByKey($data['integration_attempts']['status_totals'], 'status'),
         );
         $this->assertSame(
@@ -140,15 +178,17 @@ class TenantWhatsappOperationsApiTest extends TestCase
             ['payload_validation_failed' => 1, 'webhook_signature_invalid' => 1],
             $this->totalsByKey($data['boundary_rejections']['code_totals'], 'code'),
         );
-        $this->assertSame(2, data_get($data, 'operational_cards.messages_recent_total'));
-        $this->assertSame(2, data_get($data, 'operational_cards.attempts_recent_total'));
+        $this->assertSame(3, data_get($data, 'operational_cards.messages_recent_total'));
+        $this->assertSame(3, data_get($data, 'operational_cards.attempts_recent_total'));
         $this->assertSame(1, data_get($data, 'operational_cards.operational_failures_total'));
         $this->assertSame(0, data_get($data, 'operational_cards.retry_scheduled_total'));
         $this->assertSame(0, data_get($data, 'operational_cards.fallback_scheduled_total'));
         $this->assertSame(0, data_get($data, 'operational_cards.fallback_executed_total'));
+        $this->assertSame(1, data_get($data, 'operational_cards.duplicate_prevented_total'));
+        $this->assertSame(1, data_get($data, 'operational_cards.duplicate_risk_total'));
         $this->assertSame(2, data_get($data, 'operational_cards.boundary_rejections_total'));
         $this->assertSame(0, data_get($data, 'operational_cards.pending_queue_total'));
-        $this->assertSame(50.0, (float) data_get($data, 'operational_cards.operational_failure_rate'));
+        $this->assertSame(33.33, (float) data_get($data, 'operational_cards.operational_failure_rate'));
         $this->assertStringNotContainsString('summary-secret-token', $response->getContent());
     }
 
@@ -338,6 +378,15 @@ class TenantWhatsappOperationsApiTest extends TestCase
         $this->assertSame(4, $primary['send_attempts_total']);
         $this->assertSame(1, $primary['success_attempts']);
         $this->assertSame(3, $primary['failure_attempts']);
+        $this->assertSame('custom', data_get($primary, 'health_window.label'));
+        $this->assertSame(1, $primary['successes_recent']);
+        $this->assertSame(3, $primary['failures_recent']);
+        $this->assertSame(1, $primary['retries_recent']);
+        $this->assertSame(2, $primary['fallbacks_recent']);
+        $this->assertSame(1, $primary['timeout_recent']);
+        $this->assertSame(1, $primary['rate_limit_recent']);
+        $this->assertSame(1, $primary['unavailable_recent']);
+        $this->assertSame(0, $primary['transient_recent']);
         $this->assertSame(1, $primary['retry_scheduled_total']);
         $this->assertSame(1, $primary['fallback_scheduled_total']);
         $this->assertSame(1, $primary['fallback_executed_total']);
@@ -430,7 +479,19 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'failure_reason' => 'Gateway expirou.',
             'failed_at' => '2026-03-19 10:25:00',
             'created_at' => '2026-03-19 10:25:00',
-            'request_payload_json' => ['authorization' => 'Bearer queue-ultra-secret-token'],
+            'request_payload_json' => [
+                'authorization' => 'Bearer queue-ultra-secret-token',
+                'provider_decision_source' => 'health_based_secondary',
+                'decision_reason' => 'Secondary selected due to unavailable primary.',
+                'deduplication_key' => 'dedup-queue-1',
+            ],
+            'response_payload_json' => [
+                'duplicate_risk' => [
+                    'duplicate_risk_detected' => true,
+                    'risk_error_code' => 'timeout_error',
+                    'deduplication_key' => 'dedup-queue-1',
+                ],
+            ],
             'provider_error_code' => 'ETIMEOUT',
         ]);
 
@@ -467,7 +528,11 @@ class TenantWhatsappOperationsApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('meta.total', 1)
             ->assertJsonPath('data.0.source', 'integration_attempt')
-            ->assertJsonPath('data.0.error_code', 'timeout_error');
+            ->assertJsonPath('data.0.error_code', 'timeout_error')
+            ->assertJsonPath('data.0.decision_source', 'health_based_secondary')
+            ->assertJsonPath('data.0.duplicate_risk', true)
+            ->assertJsonPath('data.0.details.decision_reason', 'Secondary selected due to unavailable primary.')
+            ->assertJsonPath('data.0.details.deduplication_key', 'dedup-queue-1');
 
         $this->assertStringNotContainsString('queue-ultra-secret-token', $filteredResponse->getContent());
     }
@@ -649,6 +714,39 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'result_json' => ['secret' => 'feed-manual-review-secret'],
             'occurred_at' => '2026-03-19 12:03:00',
         ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageEventId,
+            'event_name' => 'whatsapp.message.duplicate_prevented',
+            'status' => 'processed',
+            'payload_json' => [
+                'duplicate_prevented' => true,
+                'deduplication_key' => 'feed-dedup-key',
+                'provider_decision_source' => 'primary_default',
+                'decision_reason' => 'Primary healthy.',
+            ],
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'occurred_at' => '2026-03-19 12:03:20',
+        ]);
+        $this->createEventLog($tenant, [
+            'message_id' => $messageEventId,
+            'event_name' => 'whatsapp.message.duplicate_risk_detected',
+            'status' => 'processed',
+            'payload_json' => [
+                'duplicate_risk_detected' => true,
+                'risk_error_code' => 'timeout_error',
+                'deduplication_key' => 'feed-dedup-key',
+                'provider_decision_source' => 'primary_default',
+                'decision_reason' => 'Primary healthy.',
+            ],
+            'context_json' => [
+                'provider' => 'fake',
+                'provider_slot' => 'primary',
+            ],
+            'occurred_at' => '2026-03-19 12:03:30',
+        ]);
 
         $this->createBoundaryRejectionAudit($tenant, [
             'provider' => 'fake',
@@ -671,7 +769,19 @@ class TenantWhatsappOperationsApiTest extends TestCase
             'failure_reason' => 'Feature nao suportada.',
             'failed_at' => '2026-03-19 12:05:00',
             'created_at' => '2026-03-19 12:05:00',
-            'request_payload_json' => ['authorization' => 'Bearer feed-integration-secret'],
+            'request_payload_json' => [
+                'authorization' => 'Bearer feed-integration-secret',
+                'provider_decision_source' => 'health_based_secondary',
+                'decision_reason' => 'Secondary selected due to unavailable primary.',
+                'deduplication_key' => 'feed-dedup-key',
+            ],
+            'response_payload_json' => [
+                'duplicate_risk' => [
+                    'duplicate_risk_detected' => true,
+                    'risk_error_code' => 'timeout_error',
+                    'deduplication_key' => 'feed-dedup-key',
+                ],
+            ],
         ]);
 
         $response = $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'))
@@ -685,15 +795,27 @@ class TenantWhatsappOperationsApiTest extends TestCase
 
         $items = collect($response->json('data'));
 
-        $this->assertSame(8, $response->json('meta.total'));
+        $this->assertSame(10, $response->json('meta.total'));
         $this->assertSame('terminal_failure', $items->first()['type']);
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_config_activated'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_healthcheck'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'outbox_reclaimed'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_fallback_scheduled'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'provider_fallback_executed'));
+        $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'duplicate_prevented'));
+        $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'duplicate_risk_detected'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'manual_review_required'));
         $this->assertTrue($items->contains(fn (array $item): bool => $item['type'] === 'boundary_rejection'));
+        $this->assertTrue($items->contains(
+            fn (array $item): bool => $item['type'] === 'duplicate_prevented'
+                && (string) data_get($item, 'details.deduplication_key') === 'feed-dedup-key'
+                && (bool) data_get($item, 'details.duplicate_prevented') === true
+        ));
+        $this->assertTrue($items->contains(
+            fn (array $item): bool => $item['type'] === 'terminal_failure'
+                && (string) ($item['decision_source'] ?? '') === 'health_based_secondary'
+                && (string) data_get($item, 'details.decision_reason') === 'Secondary selected due to unavailable primary.'
+        ));
 
         $content = $response->getContent();
         $this->assertStringNotContainsString('feed-healthcheck-secret', $content);

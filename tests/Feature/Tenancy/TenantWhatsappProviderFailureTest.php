@@ -245,8 +245,11 @@ class TenantWhatsappProviderFailureTest extends TestCase
             $this->assertSame('fallback_scheduled', $attempt->status);
             $this->assertSame('provider_unavailable', $attempt->normalized_error_code);
             $this->assertSame('primary', data_get($attempt->request_payload_json, 'provider_slot'));
+            $this->assertSame('primary_default', data_get($attempt->request_payload_json, 'provider_decision_source'));
+            $this->assertSame('Primary healthy.', data_get($attempt->request_payload_json, 'decision_reason'));
             $this->assertSame('primary', data_get($scheduledEvent->payload_json, 'fallback.from_slot'));
             $this->assertSame('secondary', data_get($scheduledEvent->payload_json, 'fallback.to_slot'));
+            $this->assertSame('primary_default', data_get($scheduledEvent->payload_json, 'provider_decision_source'));
         });
 
         Carbon::setTestNow(now()->addSeconds(3));
@@ -276,8 +279,136 @@ class TenantWhatsappProviderFailureTest extends TestCase
             $this->assertSame('succeeded', $latestAttempt->status);
             $this->assertSame('secondary', data_get($latestAttempt->request_payload_json, 'provider_slot'));
             $this->assertSame('fallback', data_get($latestAttempt->request_payload_json, 'dispatch_variant'));
+            $this->assertSame('fallback_pinned', data_get($latestAttempt->request_payload_json, 'provider_decision_source'));
+            $this->assertSame('Fallback already active for this outbox event.', data_get($latestAttempt->request_payload_json, 'decision_reason'));
             $this->assertSame('fake', data_get($latestAttempt->response_payload_json, 'fallback.from_provider'));
             $this->assertSame('fake-transient-failure', data_get($executedEvent->payload_json, 'provider'));
+            $this->assertSame('fallback_pinned', data_get($executedEvent->payload_json, 'provider_decision_source'));
+        });
+    }
+
+    public function test_it_blocks_duplicate_dispatch_after_a_previous_successful_send(): void
+    {
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-provider-dedup-success',
+            domain: 'barbearia-provider-dedup-success.test',
+        );
+        $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+
+        $this->withTenantConnection($tenant, function (): void {
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'primary',
+                'provider' => 'fake',
+                'enabled' => true,
+            ]);
+        });
+
+        $clientId = $this->postJson($this->tenantUrl($tenant, '/clients'), [
+            'full_name' => 'Cliente Deduplicacao',
+            'phone_e164' => '+5511999996010',
+            'whatsapp_opt_in' => true,
+        ])->assertCreated()->json('data.id');
+
+        $firstMessageId = $this->postJson($this->tenantUrl($tenant, '/messages/whatsapp'), [
+            'client_id' => $clientId,
+            'body_text' => 'Mensagem com deduplicacao.',
+        ])->assertCreated()->json('data.id');
+
+        $this->artisan('tenancy:process-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $secondMessageId = $this->postJson($this->tenantUrl($tenant, '/messages/whatsapp'), [
+            'client_id' => $clientId,
+            'body_text' => 'Mensagem com deduplicacao.',
+        ])->assertCreated()->json('data.id');
+
+        $this->artisan('tenancy:process-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $this->withTenantConnection($tenant, function () use ($firstMessageId, $secondMessageId): void {
+            $firstMessage = Message::query()->findOrFail($firstMessageId);
+            $secondMessage = Message::query()->findOrFail($secondMessageId);
+            $secondOutbox = OutboxEvent::query()->where('message_id', $secondMessageId)->firstOrFail();
+            $secondAttempt = IntegrationAttempt::query()->where('message_id', $secondMessageId)->latest('created_at')->firstOrFail();
+            $duplicateEvent = EventLog::query()->where('event_name', 'whatsapp.message.duplicate_prevented')->latest('occurred_at')->firstOrFail();
+
+            $this->assertSame('dispatched', $firstMessage->status);
+            $this->assertNotNull($firstMessage->external_message_id);
+            $this->assertSame('duplicate_prevented', $secondMessage->status);
+            $this->assertNull($secondMessage->external_message_id);
+            $this->assertSame($firstMessage->deduplication_key, $secondMessage->deduplication_key);
+            $this->assertSame('processed', $secondOutbox->status);
+            $this->assertSame('duplicate_prevented', $secondAttempt->status);
+            $this->assertSame('duplicate_prevented', $secondAttempt->normalized_status);
+            $this->assertTrue((bool) data_get($secondAttempt->response_payload_json, 'duplicate_prevented'));
+            $this->assertSame($firstMessageId, data_get($secondAttempt->response_payload_json, 'duplicate_of_message_id'));
+            $this->assertTrue((bool) data_get($secondMessage->payload_json, 'deduplication.duplicate_prevented'));
+            $this->assertSame($secondMessage->deduplication_key, data_get($duplicateEvent->payload_json, 'deduplication_key'));
+        });
+    }
+
+    public function test_it_records_duplicate_risk_for_retryable_timeout_errors(): void
+    {
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-provider-duplicate-risk-timeout',
+            domain: 'barbearia-provider-duplicate-risk-timeout.test',
+        );
+        $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+
+        $this->withTenantConnection($tenant, function (): void {
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'primary',
+                'provider' => 'fake',
+                'retry_profile_json' => [
+                    'max_attempts' => 3,
+                    'retry_backoff_seconds' => 2,
+                ],
+                'enabled' => true,
+                'settings_json' => [
+                    'testing' => [
+                        'fail_on_attempts' => [1],
+                        'error_code' => 'timeout_error',
+                        'message' => 'Timeout com risco de duplicidade.',
+                    ],
+                ],
+            ]);
+        });
+
+        $clientId = $this->postJson($this->tenantUrl($tenant, '/clients'), [
+            'full_name' => 'Cliente Duplicate Risk',
+            'phone_e164' => '+5511999996011',
+            'whatsapp_opt_in' => true,
+        ])->assertCreated()->json('data.id');
+
+        $messageId = $this->postJson($this->tenantUrl($tenant, '/messages/whatsapp'), [
+            'client_id' => $clientId,
+            'body_text' => 'Mensagem com timeout controlado.',
+        ])->assertCreated()->json('data.id');
+
+        $this->artisan('tenancy:process-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $this->withTenantConnection($tenant, function () use ($messageId): void {
+            $message = Message::query()->findOrFail($messageId);
+            $outboxEvent = OutboxEvent::query()->where('message_id', $messageId)->firstOrFail();
+            $attempt = IntegrationAttempt::query()->where('message_id', $messageId)->latest('created_at')->firstOrFail();
+            $riskEvent = EventLog::query()->where('event_name', 'whatsapp.message.duplicate_risk_detected')->latest('occurred_at')->firstOrFail();
+
+            $this->assertSame('queued', $message->status);
+            $this->assertSame('retry_scheduled', $outboxEvent->status);
+            $this->assertSame('retry_scheduled', $attempt->status);
+            $this->assertSame('timeout_error', $attempt->normalized_error_code);
+            $this->assertTrue((bool) data_get($message->payload_json, 'deduplication.duplicate_risk_detected'));
+            $this->assertSame('timeout_error', data_get($attempt->response_payload_json, 'duplicate_risk.risk_error_code'));
+            $this->assertSame($message->deduplication_key, data_get($attempt->response_payload_json, 'duplicate_risk.deduplication_key'));
+            $this->assertSame($message->deduplication_key, data_get($riskEvent->payload_json, 'deduplication_key'));
+            $this->assertSame('primary_default', data_get($attempt->request_payload_json, 'provider_decision_source'));
         });
     }
 

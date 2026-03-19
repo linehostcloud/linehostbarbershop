@@ -219,7 +219,7 @@ class ReclaimStaleOutboxEventsAction
 
     private function shouldReconcileProcessed(OutboxEvent $outboxEvent, ?IntegrationAttempt $currentAttempt): bool
     {
-        if ($currentAttempt?->status === 'succeeded') {
+        if (in_array($currentAttempt?->status, ['succeeded', 'duplicate_prevented'], true)) {
             return true;
         }
 
@@ -233,13 +233,15 @@ class ReclaimStaleOutboxEventsAction
             return false;
         }
 
-        return $message->external_message_id !== null
+        return (
+            $message->external_message_id !== null
             && in_array($message->status, [
                 WhatsappMessageStatus::Dispatched->value,
                 WhatsappMessageStatus::Sent->value,
                 WhatsappMessageStatus::Delivered->value,
                 WhatsappMessageStatus::Read->value,
-            ], true);
+            ], true)
+        ) || $message->status === 'duplicate_prevented';
     }
 
     private function shouldMirrorTerminalFailure(?IntegrationAttempt $currentAttempt): bool
