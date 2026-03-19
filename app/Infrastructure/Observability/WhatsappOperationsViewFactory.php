@@ -144,6 +144,12 @@ class WhatsappOperationsViewFactory
     public function queueIntegrationAttemptItem(IntegrationAttempt $attempt): array
     {
         $message = $attempt->message;
+        $plannedFallback = is_array(data_get($attempt->response_payload_json, 'planned_fallback'))
+            ? $this->sanitizer->sanitize((array) data_get($attempt->response_payload_json, 'planned_fallback'))
+            : null;
+        $activeFallback = is_array(data_get($attempt->response_payload_json, 'active_fallback'))
+            ? $this->sanitizer->sanitize((array) data_get($attempt->response_payload_json, 'active_fallback'))
+            : null;
 
         return [
             'source' => 'integration_attempt',
@@ -171,6 +177,8 @@ class WhatsappOperationsViewFactory
                 'retryable' => $attempt->retryable,
                 'provider_error_code' => $attempt->provider_error_code,
                 'provider_status' => $attempt->provider_status,
+                'planned_fallback' => $plannedFallback,
+                'active_fallback' => $activeFallback,
             ],
         ];
     }
@@ -227,28 +235,48 @@ class WhatsappOperationsViewFactory
     {
         $message = $eventLog->message;
         $reason = (string) (data_get($eventLog->payload_json, 'reason') ?? data_get($eventLog->result_json, 'reason') ?? '');
+        $type = match ($eventLog->event_name) {
+            'outbox.event.reclaim.blocked' => 'manual_review_required',
+            'whatsapp.message.fallback.scheduled' => 'provider_fallback_scheduled',
+            'whatsapp.message.fallback.executed' => 'provider_fallback_executed',
+            default => 'outbox_reclaimed',
+        };
+        $provider = is_string(data_get($eventLog->context_json, 'provider')) && data_get($eventLog->context_json, 'provider') !== ''
+            ? (string) data_get($eventLog->context_json, 'provider')
+            : $message?->provider;
+        $slot = is_string(data_get($eventLog->context_json, 'provider_slot')) && data_get($eventLog->context_json, 'provider_slot') !== ''
+            ? (string) data_get($eventLog->context_json, 'provider_slot')
+            : $this->slotFromMessage($message);
 
         return [
             'source' => 'event_log',
-            'type' => $eventLog->event_name === 'outbox.event.reclaim.blocked'
-                ? 'manual_review_required'
-                : 'outbox_reclaimed',
-            'provider' => $message?->provider,
-            'slot' => $this->slotFromMessage($message),
+            'type' => $type,
+            'provider' => $provider,
+            'slot' => $slot,
             'status' => $eventLog->status,
-            'error_code' => null,
+            'error_code' => is_string(data_get($eventLog->payload_json, 'fallback.trigger_error_code'))
+                ? (string) data_get($eventLog->payload_json, 'fallback.trigger_error_code')
+                : null,
             'direction' => null,
-            'severity' => $eventLog->event_name === 'outbox.event.reclaim.blocked' ? 'high' : 'medium',
+            'severity' => match ($eventLog->event_name) {
+                'outbox.event.reclaim.blocked' => 'high',
+                'whatsapp.message.fallback.executed' => 'medium',
+                default => 'medium',
+            },
             'occurred_at' => $eventLog->occurred_at?->toIso8601String(),
             'reference_id' => $eventLog->id,
-            'message' => $eventLog->event_name === 'outbox.event.reclaim.blocked'
-                ? 'Reclaim automatico bloqueado; revisao manual exigida.'
-                : 'Outbox stale recolocado para retry.',
+            'message' => match ($eventLog->event_name) {
+                'outbox.event.reclaim.blocked' => 'Reclaim automatico bloqueado; revisao manual exigida.',
+                'whatsapp.message.fallback.scheduled' => 'Fallback controlado agendado para o provider secundario.',
+                'whatsapp.message.fallback.executed' => 'Fallback controlado executado no provider secundario.',
+                default => 'Outbox stale recolocado para retry.',
+            },
             'details' => [
                 'event_name' => $eventLog->event_name,
                 'message_id' => $eventLog->message_id,
                 'aggregate_id' => $eventLog->aggregate_id,
                 'reason' => $reason !== '' ? $reason : null,
+                'payload' => $this->sanitizer->sanitize($eventLog->payload_json ?? []),
                 'result' => $this->sanitizer->sanitize($eventLog->result_json ?? []),
             ],
         ];

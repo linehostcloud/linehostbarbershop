@@ -4,7 +4,9 @@ namespace App\Application\Actions\Observability;
 
 use App\Application\Actions\Communication\DispatchWhatsappMessageAction;
 use App\Application\Actions\Communication\ProcessWhatsappWebhookAction;
+use App\Domain\Communication\Exceptions\WhatsappProviderFallbackException;
 use App\Domain\Communication\Exceptions\WhatsappProviderException;
+use App\Domain\Observability\Models\EventLog;
 use App\Domain\Observability\Models\OutboxEvent;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -120,6 +122,23 @@ class ProcessOutboxEventAction
                 'failed_at' => null,
             ])->save();
 
+            if (($result['dispatch_variant'] ?? null) === 'fallback' && is_array($result['fallback'] ?? null)) {
+                $this->recordFallbackEvent(
+                    freshEvent: $freshEvent,
+                    eventName: 'whatsapp.message.fallback.executed',
+                    idempotencyKey: sprintf('whatsapp-fallback-executed:%s:%d', $freshEvent->id, $freshEvent->attempt_count),
+                    payload: [
+                        'message_id' => $freshEvent->message_id,
+                        'outbox_event_id' => $freshEvent->id,
+                        'integration_attempt_id' => $result['integration_attempt_id'] ?? null,
+                        'provider' => $result['provider'] ?? null,
+                        'provider_slot' => $result['provider_slot'] ?? null,
+                        'fallback' => $result['fallback'],
+                    ],
+                    occurredAt: $freshEvent->processed_at ?? now(),
+                );
+            }
+
             return $freshEvent->fresh(['eventLog', 'message', 'integrationAttempts']);
         });
     }
@@ -134,25 +153,61 @@ class ProcessOutboxEventAction
                 ->with(['eventLog', 'message', 'integrationAttempts'])
                 ->findOrFail($outboxEvent->id);
 
-            $willRetry = $this->shouldRetry($freshEvent, $throwable);
-            $nextAttemptAt = $willRetry ? now()->addSeconds($freshEvent->retry_backoff_seconds) : null;
+            $fallbackDecision = $throwable instanceof WhatsappProviderFallbackException
+                ? $throwable->fallbackDecision
+                : null;
+            $willRetry = $fallbackDecision !== null ? true : $this->shouldRetry($freshEvent, $throwable);
+            $nextAttemptAt = $willRetry
+                ? now()->addSeconds($fallbackDecision?->backoffSeconds ?? $freshEvent->retry_backoff_seconds)
+                : null;
+            $context = is_array($freshEvent->context_json) ? $freshEvent->context_json : [];
+
+            if ($fallbackDecision !== null && $nextAttemptAt !== null) {
+                $context['whatsapp_fallback'] = array_merge($fallbackDecision->toArray(), [
+                    'active' => true,
+                    'scheduled_at' => now()->toIso8601String(),
+                    'execute_after' => $nextAttemptAt->toIso8601String(),
+                ]);
+            }
 
             $freshEvent->forceFill([
                 'status' => $willRetry ? 'retry_scheduled' : 'failed',
                 'available_at' => $nextAttemptAt ?: $freshEvent->available_at,
+                'context_json' => $context !== [] ? $context : $freshEvent->context_json,
                 'failed_at' => $willRetry ? null : now(),
                 'failure_reason' => $throwable->getMessage(),
             ])->save();
 
             $freshEvent->eventLog?->forceFill([
                 'status' => $willRetry ? 'retry_scheduled' : 'failed',
-                'result_json' => [
+                'result_json' => array_filter([
                     'error' => $throwable->getMessage(),
                     'next_retry_at' => $nextAttemptAt?->toIso8601String(),
-                ],
+                    'fallback' => $fallbackDecision !== null
+                        ? array_merge($fallbackDecision->toArray(), [
+                            'scheduled_at' => data_get($context, 'whatsapp_fallback.scheduled_at'),
+                            'execute_after' => data_get($context, 'whatsapp_fallback.execute_after'),
+                        ])
+                        : null,
+                ], static fn (mixed $value): bool => $value !== null),
                 'failed_at' => $willRetry ? null : now(),
                 'failure_reason' => $throwable->getMessage(),
             ])->save();
+
+            if ($fallbackDecision !== null) {
+                $this->recordFallbackEvent(
+                    freshEvent: $freshEvent,
+                    eventName: 'whatsapp.message.fallback.scheduled',
+                    idempotencyKey: sprintf('whatsapp-fallback-scheduled:%s:%d', $freshEvent->id, $freshEvent->attempt_count),
+                    payload: [
+                        'message_id' => $freshEvent->message_id,
+                        'outbox_event_id' => $freshEvent->id,
+                        'retry_at' => $nextAttemptAt?->toIso8601String(),
+                        'fallback' => data_get($context, 'whatsapp_fallback'),
+                    ],
+                    occurredAt: now(),
+                );
+            }
 
             return $freshEvent->fresh(['eventLog', 'message', 'integrationAttempts']);
         });
@@ -169,5 +224,42 @@ class ProcessOutboxEventAction
         }
 
         return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function recordFallbackEvent(
+        OutboxEvent $freshEvent,
+        string $eventName,
+        string $idempotencyKey,
+        array $payload,
+        \DateTimeInterface $occurredAt,
+    ): void {
+        EventLog::query()->firstOrCreate(
+            ['idempotency_key' => $idempotencyKey],
+            [
+                'message_id' => $freshEvent->message_id,
+                'aggregate_type' => 'message',
+                'aggregate_id' => $freshEvent->message_id,
+                'event_name' => $eventName,
+                'trigger_source' => 'system',
+                'status' => 'processed',
+                'correlation_id' => $freshEvent->eventLog?->correlation_id,
+                'causation_id' => $freshEvent->event_log_id,
+                'payload_json' => $payload,
+                'context_json' => [
+                    'channel' => 'whatsapp',
+                    'direction' => 'outbound',
+                    'provider' => data_get($payload, 'provider') ?? data_get($payload, 'fallback.to_provider'),
+                    'provider_slot' => data_get($payload, 'provider_slot') ?? data_get($payload, 'fallback.to_slot'),
+                ],
+                'result_json' => [
+                    'recorded_by' => 'fallback_control',
+                ],
+                'occurred_at' => $occurredAt,
+                'processed_at' => $occurredAt,
+            ],
+        );
     }
 }

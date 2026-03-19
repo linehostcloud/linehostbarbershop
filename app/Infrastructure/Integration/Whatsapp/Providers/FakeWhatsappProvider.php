@@ -22,9 +22,9 @@ use Illuminate\Support\Str;
 class FakeWhatsappProvider implements WhatsappProvider
 {
     public function __construct(
+        private readonly WhatsappProviderCapabilityMatrix $capabilityMatrix,
         private readonly string $name = 'fake',
         private readonly bool $failOnFirstAttempt = false,
-        private readonly WhatsappProviderCapabilityMatrix $capabilityMatrix,
     ) {
     }
 
@@ -37,12 +37,8 @@ class FakeWhatsappProvider implements WhatsappProvider
     {
         $attemptNumber = (int) data_get($message->payload, 'attempt_number', 1);
 
-        if ($this->failOnFirstAttempt && $attemptNumber === 1) {
-            throw new WhatsappProviderException(new ProviderErrorData(
-                code: WhatsappProviderErrorCode::TransientNetworkError,
-                message: 'Falha transiente simulada no provider fake de WhatsApp.',
-                retryable: true,
-            ));
+        if ($error = $this->simulatedFailure($configuration, $attemptNumber)) {
+            throw new WhatsappProviderException($error);
         }
 
         return new ProviderDispatchResult(
@@ -181,5 +177,73 @@ class FakeWhatsappProvider implements WhatsappProvider
     public function supports(string $feature): bool
     {
         return $this->capabilityMatrix->isImplemented($this->providerName(), $feature);
+    }
+
+    private function simulatedFailure(WhatsappProviderConfig $configuration, int $attemptNumber): ?ProviderErrorData
+    {
+        $testing = $this->testingSettings($configuration);
+        $attempts = $this->failureAttempts($testing);
+
+        if (! in_array($attemptNumber, $attempts, true)) {
+            return null;
+        }
+
+        $errorCode = WhatsappProviderErrorCode::tryFrom((string) ($testing['error_code'] ?? ''))
+            ?? WhatsappProviderErrorCode::TransientNetworkError;
+
+        return new ProviderErrorData(
+            code: $errorCode,
+            message: is_string($testing['message'] ?? null) && $testing['message'] !== ''
+                ? (string) $testing['message']
+                : sprintf('Falha simulada "%s" no provider fake de WhatsApp.', $errorCode->value),
+            retryable: array_key_exists('retryable', $testing)
+                ? filter_var($testing['retryable'], FILTER_VALIDATE_BOOL)
+                : in_array($errorCode, [
+                    WhatsappProviderErrorCode::ProviderUnavailable,
+                    WhatsappProviderErrorCode::TimeoutError,
+                    WhatsappProviderErrorCode::RateLimit,
+                    WhatsappProviderErrorCode::TransientNetworkError,
+                ], true),
+            httpStatus: is_numeric($testing['http_status'] ?? null) ? (int) $testing['http_status'] : null,
+            providerCode: is_string($testing['provider_code'] ?? null) && $testing['provider_code'] !== ''
+                ? (string) $testing['provider_code']
+                : null,
+            requestId: is_string($testing['request_id'] ?? null) && $testing['request_id'] !== ''
+                ? (string) $testing['request_id']
+                : null,
+            details: [
+                'testing' => [
+                    'provider' => $this->providerName(),
+                    'attempt_number' => $attemptNumber,
+                    'error_code' => $errorCode->value,
+                ],
+            ],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function testingSettings(WhatsappProviderConfig $configuration): array
+    {
+        $settings = $configuration->setting('testing', []);
+
+        return is_array($settings) ? $settings : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $testing
+     * @return list<int>
+     */
+    private function failureAttempts(array $testing): array
+    {
+        if (array_key_exists('fail_on_attempts', $testing)) {
+            return array_values(array_filter(array_map(
+                static fn (mixed $value): ?int => is_numeric($value) ? max(1, (int) $value) : null,
+                (array) $testing['fail_on_attempts'],
+            )));
+        }
+
+        return $this->failOnFirstAttempt ? [1] : [];
     }
 }

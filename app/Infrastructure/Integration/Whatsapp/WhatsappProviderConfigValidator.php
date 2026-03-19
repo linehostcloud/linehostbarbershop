@@ -23,6 +23,7 @@ class WhatsappProviderConfigValidator
         $this->assertTimeout($configuration);
         $this->assertRequiredFields($configuration);
         $this->assertCapabilities($configuration);
+        $this->assertFallbackRules($configuration);
 
         if (! $this->isTestingProvider($configuration->provider)) {
             $this->endpointGuard->assertSafe($configuration);
@@ -143,6 +144,61 @@ class WhatsappProviderConfigValidator
                     ],
                 ));
             }
+        }
+    }
+
+    private function assertFallbackRules(WhatsappProviderConfig $configuration): void
+    {
+        if ($configuration->slot !== 'primary' && ($configuration->fallbackEnabled() || $configuration->configuredFallbackProvider() !== null)) {
+            throw new WhatsappProviderException(new ProviderErrorData(
+                code: WhatsappProviderErrorCode::ValidationError,
+                message: 'Fallback controlado de WhatsApp so pode ser configurado no slot primary.',
+                retryable: false,
+                details: [
+                    'boundary_rejection_code' => WhatsappBoundaryRejectionCode::ProviderConfigInvalid->value,
+                    'provider' => $configuration->provider,
+                    'slot' => $configuration->slot,
+                ],
+            ));
+        }
+
+        if (! $configuration->fallbackEnabled()) {
+            return;
+        }
+
+        $secondary = WhatsappProviderConfig::query()
+            ->where('slot', 'secondary')
+            ->where('enabled', true)
+            ->first();
+
+        if ($secondary === null) {
+            throw new WhatsappProviderException(new ProviderErrorData(
+                code: WhatsappProviderErrorCode::ValidationError,
+                message: 'Fallback controlado requer configuracao secundaria ativa para o tenant.',
+                retryable: false,
+                details: [
+                    'boundary_rejection_code' => WhatsappBoundaryRejectionCode::ProviderConfigInvalid->value,
+                    'provider' => $configuration->provider,
+                    'slot' => $configuration->slot,
+                ],
+            ));
+        }
+
+        $configuredFallbackProvider = $configuration->configuredFallbackProvider();
+
+        if ($configuredFallbackProvider !== null && $configuredFallbackProvider !== $secondary->provider) {
+            throw new WhatsappProviderException(new ProviderErrorData(
+                code: WhatsappProviderErrorCode::ValidationError,
+                message: 'fallback_provider do slot primary deve corresponder ao provider ativo no slot secondary.',
+                retryable: false,
+                details: [
+                    'boundary_rejection_code' => WhatsappBoundaryRejectionCode::ProviderConfigInvalid->value,
+                    'provider' => $configuration->provider,
+                    'slot' => $configuration->slot,
+                    'fallback_provider' => $configuredFallbackProvider,
+                    'secondary_provider' => $secondary->provider,
+                ],
+            ));
         }
     }
 

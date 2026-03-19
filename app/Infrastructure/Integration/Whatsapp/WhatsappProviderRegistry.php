@@ -26,8 +26,16 @@ class WhatsappProviderRegistry
     {
         try {
             return match (WhatsappProviderName::from($provider)) {
-                WhatsappProviderName::Fake => new FakeWhatsappProvider('fake', false, $this->container->make(WhatsappProviderCapabilityMatrix::class)),
-                WhatsappProviderName::FakeTransientFailure => new FakeWhatsappProvider('fake-transient-failure', true, $this->container->make(WhatsappProviderCapabilityMatrix::class)),
+                WhatsappProviderName::Fake => new FakeWhatsappProvider(
+                    $this->container->make(WhatsappProviderCapabilityMatrix::class),
+                    'fake',
+                    false,
+                ),
+                WhatsappProviderName::FakeTransientFailure => new FakeWhatsappProvider(
+                    $this->container->make(WhatsappProviderCapabilityMatrix::class),
+                    'fake-transient-failure',
+                    true,
+                ),
                 WhatsappProviderName::WhatsAppCloud => $this->container->make(WhatsappCloudProvider::class),
                 WhatsappProviderName::EvolutionApi => $this->container->make(EvolutionApiWhatsappProvider::class),
                 WhatsappProviderName::GoWa => $this->container->make(GoWaWhatsappProvider::class),

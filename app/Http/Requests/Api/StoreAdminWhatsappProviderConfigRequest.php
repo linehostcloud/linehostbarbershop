@@ -42,6 +42,8 @@ class StoreAdminWhatsappProviderConfigRequest extends FormRequest
             'settings_json.auth_username' => ['nullable', 'string', 'max:255'],
             'settings_json.auth_password' => ['nullable', 'string', 'max:4096'],
             'settings_json.healthcheck_path' => ['nullable', 'string', 'max:255'],
+            'settings_json.fallback' => ['nullable', 'array'],
+            'settings_json.fallback.enabled' => ['nullable', 'boolean'],
             'enabled' => ['nullable', 'boolean'],
         ];
     }

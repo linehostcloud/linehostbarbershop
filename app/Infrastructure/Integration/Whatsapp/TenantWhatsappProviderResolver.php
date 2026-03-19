@@ -22,10 +22,6 @@ class TenantWhatsappProviderResolver
     {
         $provider = $requestedProvider !== null ? trim($requestedProvider) : null;
 
-        if ($provider !== null && $provider !== '' && $this->isTestingProvider($provider)) {
-            return $this->makeResolved($this->ephemeralTestingConfig($provider));
-        }
-
         if ($provider !== null && $provider !== '') {
             $this->registry->assertRegistered($provider);
         }
@@ -56,6 +52,10 @@ class TenantWhatsappProviderResolver
             return $this->makeResolved($configured, $configured->slot === 'primary' ? $secondary : null);
         }
 
+        if ($this->isTestingProvider($provider)) {
+            return $this->makeResolved($this->ephemeralTestingConfig($provider));
+        }
+
         throw new WhatsappProviderException(new ProviderErrorData(
             code: WhatsappProviderErrorCode::ValidationError,
             message: sprintf('O tenant nao possui configuracao ativa para o provider "%s".', $provider),
@@ -83,10 +83,6 @@ class TenantWhatsappProviderResolver
             ));
         }
 
-        if ($this->isTestingProvider($provider)) {
-            return $this->makeResolved($this->ephemeralTestingConfig($provider));
-        }
-
         $this->registry->assertRegistered($provider);
 
         $configured = WhatsappProviderConfig::query()
@@ -94,32 +90,65 @@ class TenantWhatsappProviderResolver
             ->where('enabled', true)
             ->first();
 
-        if ($configured === null) {
-            $activeProviders = WhatsappProviderConfig::query()
-                ->where('enabled', true)
-                ->pluck('provider')
-                ->all();
+        if ($configured !== null) {
+            return $this->makeResolved($configured);
+        }
 
+        if ($this->isTestingProvider($provider)) {
+            return $this->makeResolved($this->ephemeralTestingConfig($provider));
+        }
+
+        $activeProviders = WhatsappProviderConfig::query()
+            ->where('enabled', true)
+            ->pluck('provider')
+            ->all();
+
+        throw new WhatsappProviderException(new ProviderErrorData(
+            code: WhatsappProviderErrorCode::ValidationError,
+            message: $activeProviders !== []
+                ? sprintf(
+                    'Webhook recebido para o provider "%s", mas o tenant possui configuracao ativa para: %s.',
+                    $provider,
+                    implode(', ', $activeProviders),
+                )
+                : sprintf('O tenant nao possui configuracao ativa para o provider "%s".', $provider),
+            retryable: false,
+            details: [
+                'boundary_rejection_code' => $activeProviders !== []
+                    ? WhatsappBoundaryRejectionCode::EndpointMismatch->value
+                    : WhatsappBoundaryRejectionCode::ProviderConfigMissing->value,
+                'provider' => $provider,
+            ],
+        ));
+    }
+
+    public function resolveBySlot(string $slot): ResolvedWhatsappProvider
+    {
+        $configuration = WhatsappProviderConfig::query()
+            ->where('slot', $slot)
+            ->where('enabled', true)
+            ->first();
+
+        if ($configuration === null) {
             throw new WhatsappProviderException(new ProviderErrorData(
                 code: WhatsappProviderErrorCode::ValidationError,
-                message: $activeProviders !== []
-                    ? sprintf(
-                        'Webhook recebido para o provider "%s", mas o tenant possui configuracao ativa para: %s.',
-                        $provider,
-                        implode(', ', $activeProviders),
-                    )
-                    : sprintf('O tenant nao possui configuracao ativa para o provider "%s".', $provider),
+                message: sprintf('O tenant nao possui configuracao ativa para o slot "%s".', $slot),
                 retryable: false,
                 details: [
-                    'boundary_rejection_code' => $activeProviders !== []
-                        ? WhatsappBoundaryRejectionCode::EndpointMismatch->value
-                        : WhatsappBoundaryRejectionCode::ProviderConfigMissing->value,
-                    'provider' => $provider,
+                    'boundary_rejection_code' => WhatsappBoundaryRejectionCode::ProviderConfigMissing->value,
+                    'slot' => $slot,
                 ],
             ));
         }
 
-        return $this->makeResolved($configured);
+        $fallback = $slot === 'primary'
+            ? WhatsappProviderConfig::query()
+                ->where('slot', 'secondary')
+                ->where('enabled', true)
+                ->first()
+            : null;
+
+        return $this->makeResolved($configuration, $fallback);
     }
 
     private function resolveTestingFallback(): ResolvedWhatsappProvider

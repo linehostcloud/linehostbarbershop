@@ -124,4 +124,16 @@ class WhatsappProviderConfig extends TenantModel
 
         return is_string($value) && $value !== '' ? $value : null;
     }
+
+    public function fallbackEnabled(): bool
+    {
+        return filter_var($this->setting('fallback.enabled', false), FILTER_VALIDATE_BOOL);
+    }
+
+    public function configuredFallbackProvider(): ?string
+    {
+        $provider = $this->fallback_provider;
+
+        return is_string($provider) && $provider !== '' ? $provider : null;
+    }
 }

@@ -4,8 +4,10 @@ namespace App\Application\Actions\Communication;
 
 use App\Domain\Communication\Data\OutboundWhatsappMessageData;
 use App\Domain\Communication\Data\ProviderErrorData;
+use App\Domain\Communication\Data\ResolvedWhatsappProvider;
 use App\Domain\Communication\Enums\WhatsappMessageStatus;
 use App\Domain\Communication\Enums\WhatsappProviderErrorCode;
+use App\Domain\Communication\Exceptions\WhatsappProviderFallbackException;
 use App\Domain\Communication\Exceptions\WhatsappProviderException;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Integration\Models\IntegrationAttempt;
@@ -23,6 +25,7 @@ class DispatchWhatsappMessageAction
         private readonly WhatsappDispatchCapabilityGuard $capabilityGuard,
         private readonly WhatsappPayloadSanitizer $sanitizer,
         private readonly ApplyWhatsappStatusUpdateAction $applyStatusUpdate,
+        private readonly DetermineWhatsappFallbackDecisionAction $determineFallbackDecision,
     ) {
     }
 
@@ -52,11 +55,22 @@ class DispatchWhatsappMessageAction
             ];
         }
 
-        $resolvedProvider = $this->providerResolver->resolveForOutbound($message->provider);
+        $route = $this->resolveDispatchRoute($outboxEvent, $message);
+        /** @var ResolvedWhatsappProvider $resolvedProvider */
+        $resolvedProvider = $route['resolved_provider'];
+        $dispatchVariant = $route['dispatch_variant'];
+        $dispatchFallbackContext = $route['fallback_context'];
         $provider = $resolvedProvider->configuration->provider;
+        $providerSlot = $resolvedProvider->configuration->slot;
         $capability = $this->capabilityForMessageType($message->type);
         $attempt = IntegrationAttempt::query()->firstOrCreate([
-            'idempotency_key' => sprintf('whatsapp-dispatch:%s:%d', $outboxEvent->id, $outboxEvent->attempt_count),
+            'idempotency_key' => sprintf(
+                'whatsapp-dispatch:%s:%d:%s:%s',
+                $outboxEvent->id,
+                $outboxEvent->attempt_count,
+                $providerSlot,
+                $dispatchVariant,
+            ),
         ], [
             'message_id' => $message->id,
             'event_log_id' => $outboxEvent->event_log_id,
@@ -83,11 +97,14 @@ class DispatchWhatsappMessageAction
                 'thread_key' => $message->thread_key,
                 'type' => $message->type,
                 'provider' => $provider,
+                'provider_slot' => $providerSlot,
+                'dispatch_variant' => $dispatchVariant,
                 'payload' => $outboundMessage->payload,
                 'to' => $outboundMessage->recipientPhoneE164,
                 'body_text' => $outboundMessage->bodyText,
                 'template_name' => $outboundMessage->templateName,
                 'media_url' => $outboundMessage->mediaUrl,
+                'fallback' => $dispatchFallbackContext,
             ];
 
             $attempt->forceFill([
@@ -114,8 +131,57 @@ class DispatchWhatsappMessageAction
                     retryable: false,
                 ), $throwable);
 
+            $fallbackDecision = $this->determineFallbackDecision->execute(
+                outboxEvent: $outboxEvent,
+                resolvedProvider: $resolvedProvider,
+                capability: $capability,
+                error: $exception->error,
+            );
+
+            if ($fallbackDecision !== null) {
+                $nextRetryAt = $now->copy()->addSeconds($fallbackDecision->backoffSeconds);
+                $failurePayload = $this->failurePayload(
+                    $exception,
+                    $dispatchVariant,
+                    $providerSlot,
+                    $dispatchFallbackContext,
+                    $fallbackDecision->toArray(),
+                );
+
+                $attempt->forceFill([
+                    'status' => 'fallback_scheduled',
+                    'provider_error_code' => $exception->error->providerCode,
+                    'http_status' => $exception->error->httpStatus,
+                    'provider_request_id' => $exception->error->requestId,
+                    'retryable' => true,
+                    'normalized_error_code' => $exception->error->code->value,
+                    'next_retry_at' => $nextRetryAt,
+                    'failed_at' => null,
+                    'failure_reason' => $exception->error->message,
+                    'response_payload_json' => $failurePayload,
+                    'sanitized_payload_json' => $this->sanitizer->sanitize($failurePayload),
+                ])->save();
+
+                $message->forceFill([
+                    'failure_reason' => $exception->error->message,
+                    'failed_at' => null,
+                ])->save();
+
+                throw new WhatsappProviderFallbackException(
+                    fallbackDecision: $fallbackDecision,
+                    error: $exception->error,
+                    previous: $throwable,
+                );
+            }
+
             $willRetry = $exception->isRetryable() && $outboxEvent->attempt_count < $outboxEvent->max_attempts;
             $nextRetryAt = $willRetry ? $now->copy()->addSeconds($outboxEvent->retry_backoff_seconds) : null;
+            $failurePayload = $this->failurePayload(
+                $exception,
+                $dispatchVariant,
+                $providerSlot,
+                $dispatchFallbackContext,
+            );
 
             $attempt->forceFill([
                 'status' => $willRetry ? 'retry_scheduled' : 'failed',
@@ -127,8 +193,8 @@ class DispatchWhatsappMessageAction
                 'next_retry_at' => $nextRetryAt,
                 'failed_at' => $willRetry ? null : $now,
                 'failure_reason' => $exception->error->message,
-                'response_payload_json' => $exception->error->details,
-                'sanitized_payload_json' => $this->sanitizer->sanitize($exception->error->details),
+                'response_payload_json' => $failurePayload,
+                'sanitized_payload_json' => $this->sanitizer->sanitize($failurePayload),
             ])->save();
 
             $message->forceFill([
@@ -149,18 +215,45 @@ class DispatchWhatsappMessageAction
             throw $exception;
         }
 
-        $this->applyStatusUpdate->execute(
+        $occurredAt = $result->occurredAt ?? CarbonImmutable::instance($now);
+
+        $message = $this->applyStatusUpdate->execute(
             message: $message,
             incomingStatus: $result->normalizedStatus,
             providerMessageId: $result->providerMessageId,
-            occurredAt: $result->occurredAt ?? CarbonImmutable::instance($now),
+            occurredAt: $occurredAt,
         );
+
+        $payloadJson = $message->payload_json ?? [];
+        $payloadJson['provider_slot'] = $providerSlot;
+        $payloadJson['dispatch_variant'] = $dispatchVariant;
+
+        if ($dispatchFallbackContext !== null) {
+            $payloadJson['fallback'] = [
+                'used' => true,
+                'from_provider' => data_get($dispatchFallbackContext, 'from_provider'),
+                'from_slot' => data_get($dispatchFallbackContext, 'from_slot'),
+                'to_provider' => $provider,
+                'to_slot' => $providerSlot,
+                'trigger_error_code' => data_get($dispatchFallbackContext, 'trigger_error_code'),
+                'scheduled_at' => data_get($dispatchFallbackContext, 'scheduled_at'),
+                'executed_at' => $occurredAt->toIso8601String(),
+            ];
+        }
 
         $message->forceFill([
             'provider' => $provider,
+            'payload_json' => $payloadJson,
             'failure_reason' => null,
             'failed_at' => null,
         ])->save();
+
+        $attemptResponsePayload = [
+            'provider_response' => $result->responsePayload,
+            'dispatch_variant' => $dispatchVariant,
+            'provider_slot' => $providerSlot,
+            'fallback' => $dispatchFallbackContext,
+        ];
 
         $attempt->forceFill([
             'status' => 'succeeded',
@@ -176,17 +269,20 @@ class DispatchWhatsappMessageAction
             'next_retry_at' => null,
             'failure_reason' => null,
             'failed_at' => null,
-            'response_payload_json' => $result->responsePayload,
-            'sanitized_payload_json' => $result->sanitizedRequestPayload,
+            'response_payload_json' => $attemptResponsePayload,
+            'sanitized_payload_json' => $this->sanitizer->sanitize($attemptResponsePayload),
         ])->save();
 
         return [
             'provider' => $provider,
+            'provider_slot' => $providerSlot,
             'message_id' => $message->id,
             'integration_attempt_id' => $attempt->id,
             'external_message_id' => $result->providerMessageId,
             'status' => $result->normalizedStatus->value,
-            'sent_at' => ($result->occurredAt ?? CarbonImmutable::instance($now))->toIso8601String(),
+            'sent_at' => $occurredAt->toIso8601String(),
+            'dispatch_variant' => $dispatchVariant,
+            'fallback' => $dispatchFallbackContext,
         ];
     }
 
@@ -224,5 +320,66 @@ class DispatchWhatsappMessageAction
     private function capabilityForMessageType(string $type): string
     {
         return $this->capabilityGuard->capabilityForMessageType($type);
+    }
+
+    /**
+     * @return array{
+     *     resolved_provider: ResolvedWhatsappProvider,
+     *     dispatch_variant: string,
+     *     fallback_context: array<string, mixed>|null
+     * }
+     */
+    private function resolveDispatchRoute(OutboxEvent $outboxEvent, Message $message): array
+    {
+        $fallbackContext = $this->fallbackContext($outboxEvent);
+
+        if ($fallbackContext !== null) {
+            return [
+                'resolved_provider' => $this->providerResolver->resolveBySlot((string) data_get($fallbackContext, 'to_slot', 'secondary')),
+                'dispatch_variant' => 'fallback',
+                'fallback_context' => $fallbackContext,
+            ];
+        }
+
+        return [
+            'resolved_provider' => $this->providerResolver->resolveForOutbound($message->provider),
+            'dispatch_variant' => 'primary',
+            'fallback_context' => null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function fallbackContext(OutboxEvent $outboxEvent): ?array
+    {
+        $fallback = data_get($outboxEvent->context_json ?? [], 'whatsapp_fallback');
+
+        if (! is_array($fallback) || ! (bool) ($fallback['active'] ?? false)) {
+            return null;
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $activeFallback
+     * @param  array<string, mixed>|null  $plannedFallback
+     * @return array<string, mixed>
+     */
+    private function failurePayload(
+        WhatsappProviderException $exception,
+        string $dispatchVariant,
+        string $providerSlot,
+        ?array $activeFallback = null,
+        ?array $plannedFallback = null,
+    ): array {
+        return array_filter([
+            'error' => $exception->error->details,
+            'dispatch_variant' => $dispatchVariant,
+            'provider_slot' => $providerSlot,
+            'active_fallback' => $activeFallback,
+            'planned_fallback' => $plannedFallback,
+        ], static fn (mixed $value): bool => $value !== null);
     }
 }

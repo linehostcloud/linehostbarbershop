@@ -28,6 +28,7 @@ class WhatsappProviderConfigViewFactory
         return array_merge($this->base($configuration), [
             'retry_profile' => $configuration->retryProfile(),
             'settings' => $this->sanitizedSettings($configuration),
+            'fallback' => $this->fallbackView($configuration),
         ]);
     }
 
@@ -92,6 +93,7 @@ class WhatsappProviderConfigViewFactory
             'last_validated_at' => $configuration->last_validated_at?->toIso8601String(),
             'created_at' => $configuration->created_at?->toIso8601String(),
             'updated_at' => $configuration->updated_at?->toIso8601String(),
+            'fallback' => $this->fallbackView($configuration),
             'secret_presence' => [
                 'has_api_key' => filled($configuration->api_key),
                 'has_access_token' => filled($configuration->access_token),
@@ -112,5 +114,22 @@ class WhatsappProviderConfigViewFactory
         }
 
         return $this->payloadSanitizer->sanitize($configuration->settings_json);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fallbackView(WhatsappProviderConfig $configuration): array
+    {
+        return [
+            'enabled' => $configuration->fallbackEnabled(),
+            'configured_provider' => $configuration->configuredFallbackProvider(),
+            'eligible_error_codes' => [
+                'provider_unavailable',
+                'timeout_error',
+                'rate_limit',
+                'transient_network_error',
+            ],
+        ];
     }
 }

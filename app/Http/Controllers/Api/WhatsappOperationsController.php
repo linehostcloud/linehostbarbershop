@@ -138,7 +138,7 @@ class WhatsappOperationsController extends Controller
                     provider,
                     COUNT(*) as total,
                     SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as succeeded,
-                    SUM(CASE WHEN status IN ('failed', 'retry_scheduled') THEN 1 ELSE 0 END) as failed,
+                    SUM(CASE WHEN status IN ('failed', 'retry_scheduled', 'fallback_scheduled') THEN 1 ELSE 0 END) as failed,
                     MAX(created_at) as last_attempt_at
                 ")
                 ->groupBy('provider')
@@ -539,7 +539,12 @@ class WhatsappOperationsController extends Controller
             $items = [...$items, ...$auditItems->take($fetchLimit)->all()];
         }
 
-        if ($this->feedSourceMatches($request, 'event_log') && $this->feedTypeMatches($request, ['outbox_reclaimed', 'manual_review_required'])) {
+        if ($this->feedSourceMatches($request, 'event_log') && $this->feedTypeMatches($request, [
+            'outbox_reclaimed',
+            'manual_review_required',
+            'provider_fallback_scheduled',
+            'provider_fallback_executed',
+        ])) {
             $query = EventLog::query()
                 ->with('message')
                 ->whereIn('event_name', $this->feedEventNames($request))
@@ -893,7 +898,14 @@ class WhatsappOperationsController extends Controller
         return match ((string) $request->string('type')) {
             'outbox_reclaimed' => ['outbox.event.reclaimed'],
             'manual_review_required' => ['outbox.event.reclaim.blocked'],
-            default => ['outbox.event.reclaimed', 'outbox.event.reclaim.blocked'],
+            'provider_fallback_scheduled' => ['whatsapp.message.fallback.scheduled'],
+            'provider_fallback_executed' => ['whatsapp.message.fallback.executed'],
+            default => [
+                'outbox.event.reclaimed',
+                'outbox.event.reclaim.blocked',
+                'whatsapp.message.fallback.scheduled',
+                'whatsapp.message.fallback.executed',
+            ],
         };
     }
 

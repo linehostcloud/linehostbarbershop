@@ -41,6 +41,8 @@ class UpdateAdminWhatsappProviderConfigRequest extends FormRequest
             'settings_json.auth_username' => ['sometimes', 'nullable', 'string', 'max:255'],
             'settings_json.auth_password' => ['sometimes', 'nullable', 'string', 'max:4096'],
             'settings_json.healthcheck_path' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'settings_json.fallback' => ['sometimes', 'nullable', 'array'],
+            'settings_json.fallback.enabled' => ['sometimes', 'nullable', 'boolean'],
         ];
     }
 

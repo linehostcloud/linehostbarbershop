@@ -3,6 +3,7 @@
 namespace Tests\Feature\Tenancy;
 
 use App\Domain\Client\Models\Client;
+use App\Domain\Observability\Models\EventLog;
 use App\Domain\Communication\Models\Message;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Integration\Models\IntegrationAttempt;
@@ -10,6 +11,7 @@ use App\Domain\Observability\Models\BoundaryRejectionAudit;
 use App\Domain\Observability\Models\OutboxEvent;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
+use Illuminate\Support\Carbon;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
@@ -170,6 +172,255 @@ class TenantWhatsappProviderFailureTest extends TestCase
         $this->assertSame('whatsapp_cloud', $audit->provider);
         $this->assertSame('primary', $audit->slot);
         $this->assertSame('outbound', $audit->direction);
+    }
+
+    public function test_it_schedules_controlled_fallback_and_dispatches_on_secondary_provider(): void
+    {
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-provider-fallback-safe',
+            domain: 'barbearia-provider-fallback-safe.test',
+        );
+        $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+
+        $this->withTenantConnection($tenant, function (): void {
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'primary',
+                'provider' => 'fake',
+                'fallback_provider' => 'fake-transient-failure',
+                'retry_profile_json' => [
+                    'max_attempts' => 3,
+                    'retry_backoff_seconds' => 2,
+                ],
+                'enabled' => true,
+                'settings_json' => [
+                    'fallback' => ['enabled' => true],
+                    'testing' => [
+                        'fail_on_attempts' => [1],
+                        'error_code' => 'provider_unavailable',
+                        'message' => 'Provider primario indisponivel.',
+                    ],
+                ],
+            ]);
+
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'secondary',
+                'provider' => 'fake-transient-failure',
+                'enabled' => true,
+                'settings_json' => [
+                    'testing' => [
+                        'fail_on_attempts' => [],
+                    ],
+                ],
+            ]);
+        });
+
+        $clientId = $this->postJson($this->tenantUrl($tenant, '/clients'), [
+            'full_name' => 'Cliente Fallback Seguro',
+            'phone_e164' => '+5511999996004',
+            'whatsapp_opt_in' => true,
+        ])->assertCreated()->json('data.id');
+
+        $messageId = $this->postJson($this->tenantUrl($tenant, '/messages/whatsapp'), [
+            'client_id' => $clientId,
+            'body_text' => 'Mensagem com fallback controlado.',
+        ])->assertCreated()->json('data.id');
+
+        $this->artisan('tenancy:process-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $this->withTenantConnection($tenant, function () use ($messageId): void {
+            $message = Message::query()->findOrFail($messageId);
+            $outboxEvent = OutboxEvent::query()->where('message_id', $messageId)->firstOrFail();
+            $attempt = IntegrationAttempt::query()->where('message_id', $messageId)->latest('created_at')->firstOrFail();
+            $scheduledEvent = EventLog::query()->where('event_name', 'whatsapp.message.fallback.scheduled')->latest('occurred_at')->firstOrFail();
+
+            $this->assertSame('queued', $message->status);
+            $this->assertSame('retry_scheduled', $outboxEvent->status);
+            $this->assertTrue((bool) data_get($outboxEvent->context_json, 'whatsapp_fallback.active'));
+            $this->assertSame('fake', data_get($outboxEvent->context_json, 'whatsapp_fallback.from_provider'));
+            $this->assertSame('fake-transient-failure', data_get($outboxEvent->context_json, 'whatsapp_fallback.to_provider'));
+            $this->assertSame('provider_unavailable', data_get($outboxEvent->context_json, 'whatsapp_fallback.trigger_error_code'));
+            $this->assertSame('fallback_scheduled', $attempt->status);
+            $this->assertSame('provider_unavailable', $attempt->normalized_error_code);
+            $this->assertSame('primary', data_get($attempt->request_payload_json, 'provider_slot'));
+            $this->assertSame('primary', data_get($scheduledEvent->payload_json, 'fallback.from_slot'));
+            $this->assertSame('secondary', data_get($scheduledEvent->payload_json, 'fallback.to_slot'));
+        });
+
+        Carbon::setTestNow(now()->addSeconds(3));
+
+        try {
+            $this->artisan('tenancy:process-outbox', [
+                '--tenant' => [$tenant->slug],
+                '--limit' => 10,
+            ])->assertExitCode(0);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $this->withTenantConnection($tenant, function () use ($messageId): void {
+            $message = Message::query()->findOrFail($messageId);
+            $outboxEvent = OutboxEvent::query()->where('message_id', $messageId)->firstOrFail();
+            $latestAttempt = IntegrationAttempt::query()->where('message_id', $messageId)->latest('created_at')->firstOrFail();
+            $executedEvent = EventLog::query()->where('event_name', 'whatsapp.message.fallback.executed')->latest('occurred_at')->firstOrFail();
+
+            $this->assertSame('dispatched', $message->status);
+            $this->assertSame('fake-transient-failure', $message->provider);
+            $this->assertSame('secondary', data_get($message->payload_json, 'provider_slot'));
+            $this->assertTrue((bool) data_get($message->payload_json, 'fallback.used'));
+            $this->assertSame('fake', data_get($message->payload_json, 'fallback.from_provider'));
+            $this->assertSame('processed', $outboxEvent->status);
+            $this->assertSame(2, IntegrationAttempt::query()->where('message_id', $messageId)->count());
+            $this->assertSame('succeeded', $latestAttempt->status);
+            $this->assertSame('secondary', data_get($latestAttempt->request_payload_json, 'provider_slot'));
+            $this->assertSame('fallback', data_get($latestAttempt->request_payload_json, 'dispatch_variant'));
+            $this->assertSame('fake', data_get($latestAttempt->response_payload_json, 'fallback.from_provider'));
+            $this->assertSame('fake-transient-failure', data_get($executedEvent->payload_json, 'provider'));
+        });
+    }
+
+    public function test_it_does_not_fallback_for_terminal_provider_errors(): void
+    {
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-provider-no-fallback-terminal',
+            domain: 'barbearia-provider-no-fallback-terminal.test',
+        );
+        $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+
+        $this->withTenantConnection($tenant, function (): void {
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'primary',
+                'provider' => 'fake',
+                'fallback_provider' => 'fake-transient-failure',
+                'retry_profile_json' => [
+                    'max_attempts' => 3,
+                    'retry_backoff_seconds' => 2,
+                ],
+                'enabled' => true,
+                'settings_json' => [
+                    'fallback' => ['enabled' => true],
+                    'testing' => [
+                        'fail_on_attempts' => [1],
+                        'error_code' => 'unsupported_feature',
+                        'message' => 'Erro terminal sem fallback.',
+                    ],
+                ],
+            ]);
+
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'secondary',
+                'provider' => 'fake-transient-failure',
+                'enabled' => true,
+                'settings_json' => [
+                    'testing' => [
+                        'fail_on_attempts' => [],
+                    ],
+                ],
+            ]);
+        });
+
+        $clientId = $this->postJson($this->tenantUrl($tenant, '/clients'), [
+            'full_name' => 'Cliente Sem Fallback Terminal',
+            'phone_e164' => '+5511999996005',
+            'whatsapp_opt_in' => true,
+        ])->assertCreated()->json('data.id');
+
+        $messageId = $this->postJson($this->tenantUrl($tenant, '/messages/whatsapp'), [
+            'client_id' => $clientId,
+            'body_text' => 'Mensagem terminal sem fallback.',
+        ])->assertCreated()->json('data.id');
+
+        $this->artisan('tenancy:process-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $this->withTenantConnection($tenant, function () use ($messageId): void {
+            $message = Message::query()->findOrFail($messageId);
+            $outboxEvent = OutboxEvent::query()->where('message_id', $messageId)->firstOrFail();
+            $attempt = IntegrationAttempt::query()->where('message_id', $messageId)->latest('created_at')->firstOrFail();
+
+            $this->assertSame('failed', $message->status);
+            $this->assertSame('failed', $outboxEvent->status);
+            $this->assertSame('failed', $attempt->status);
+            $this->assertSame('unsupported_feature', $attempt->normalized_error_code);
+            $this->assertNull(data_get($outboxEvent->context_json, 'whatsapp_fallback'));
+            $this->assertSame(0, EventLog::query()->where('event_name', 'whatsapp.message.fallback.scheduled')->count());
+            $this->assertSame(0, EventLog::query()->where('event_name', 'whatsapp.message.fallback.executed')->count());
+        });
+    }
+
+    public function test_it_does_not_fallback_when_secondary_provider_cannot_handle_the_capability(): void
+    {
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-provider-no-fallback-capability',
+            domain: 'barbearia-provider-no-fallback-capability.test',
+        );
+        $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+
+        $this->withTenantConnection($tenant, function (): void {
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'primary',
+                'provider' => 'fake',
+                'fallback_provider' => 'evolution_api',
+                'retry_profile_json' => [
+                    'max_attempts' => 3,
+                    'retry_backoff_seconds' => 2,
+                ],
+                'enabled' => true,
+                'settings_json' => [
+                    'fallback' => ['enabled' => true],
+                    'testing' => [
+                        'fail_on_attempts' => [1],
+                        'error_code' => 'timeout_error',
+                        'message' => 'Timeout elegivel, mas secondary incompatível.',
+                    ],
+                ],
+            ]);
+
+            WhatsappProviderConfig::query()->create([
+                'slot' => 'secondary',
+                'provider' => 'evolution_api',
+                'base_url' => 'https://evolution.example',
+                'api_key' => 'evo-api-key',
+                'instance_name' => 'barbearia-demo',
+                'enabled_capabilities_json' => ['text', 'healthcheck'],
+                'enabled' => true,
+            ]);
+        });
+
+        $clientId = $this->postJson($this->tenantUrl($tenant, '/clients'), [
+            'full_name' => 'Cliente Sem Fallback Capability',
+            'phone_e164' => '+5511999996006',
+            'whatsapp_opt_in' => true,
+        ])->assertCreated()->json('data.id');
+
+        $messageId = $this->postJson($this->tenantUrl($tenant, '/messages/whatsapp'), [
+            'client_id' => $clientId,
+            'type' => 'template',
+            'body_text' => 'Mensagem template para capability.',
+            'payload_json' => [
+                'template_name' => 'recuperacao_capability',
+            ],
+        ])->assertCreated()->json('data.id');
+
+        $this->artisan('tenancy:process-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $this->withTenantConnection($tenant, function () use ($messageId): void {
+            $outboxEvent = OutboxEvent::query()->where('message_id', $messageId)->firstOrFail();
+            $attempt = IntegrationAttempt::query()->where('message_id', $messageId)->latest('created_at')->firstOrFail();
+
+            $this->assertSame('retry_scheduled', $outboxEvent->status);
+            $this->assertSame('retry_scheduled', $attempt->status);
+            $this->assertSame('timeout_error', $attempt->normalized_error_code);
+            $this->assertNull(data_get($outboxEvent->context_json, 'whatsapp_fallback'));
+            $this->assertSame(0, EventLog::query()->where('event_name', 'whatsapp.message.fallback.scheduled')->count());
+        });
     }
 
     /**
