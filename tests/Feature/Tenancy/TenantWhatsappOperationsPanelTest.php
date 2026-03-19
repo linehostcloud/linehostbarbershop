@@ -72,6 +72,102 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertSee('/api/v1/operations/whatsapp/feed', false);
     }
 
+    public function test_local_panel_login_cookie_authenticates_operational_api_requests(): void
+    {
+        config()->set('app.env', 'local');
+        config()->set('tenancy.identification.local_browser_domain_suffix', 'sistema-barbearia.localhost');
+        config()->set('session.domain', 'sistema-barbearia.localhost');
+
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-whatsapp-panel-local',
+            domain: 'barbearia-whatsapp-panel-local.tenant.test',
+        );
+        $user = $this->createTenantUser(
+            tenant: $tenant,
+            role: 'manager',
+            email: 'gestor@barbearia-whatsapp-panel-local.test',
+            password: 'password123',
+        );
+
+        $cookieName = (string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token');
+        $sessionCookieName = (string) config('session.cookie');
+
+        $loginPage = $this->get($this->panelLocalBrowserLoginUrl($tenant));
+        $loginPage->assertOk();
+
+        $csrfToken = $this->extractCsrfToken((string) $loginPage->getContent());
+        $sessionCookie = $this->cookieValue($loginPage, $sessionCookieName);
+
+        $this->assertNotNull($csrfToken);
+        $this->assertNotNull($sessionCookie);
+
+        $loginResponse = $this
+            ->withUnencryptedCookie($sessionCookieName, (string) $sessionCookie)
+            ->post($this->panelLocalBrowserLoginUrl($tenant), [
+                '_token' => $csrfToken,
+                'email' => $user->email,
+                'password' => 'password123',
+            ]);
+        $panelCookie = $this->cookieValue($loginResponse, $cookieName);
+
+        $loginResponse
+            ->assertRedirect($this->panelLocalBrowserUrl($tenant));
+
+        $this->assertNotNull($panelCookie);
+        $this->assertSame(
+            'sistema-barbearia.localhost',
+            $this->cookieFromResponse($loginResponse, $cookieName)?->getDomain(),
+        );
+
+        $this
+            ->withUnencryptedCookie($cookieName, (string) $panelCookie)
+            ->get($this->panelLocalBrowserUrl($tenant))
+            ->assertOk()
+            ->assertSee('Mensageria WhatsApp');
+
+        $this->call(
+            'GET',
+            '/api/v1/operations/whatsapp/summary',
+            ['window' => '24h'],
+            [$cookieName => (string) $panelCookie],
+            [],
+            [
+                'HTTP_HOST' => $this->tenantLocalBrowserHost($tenant),
+                'HTTP_ACCEPT' => 'application/json',
+            ],
+        )
+            ->assertOk()
+            ->assertJsonStructure([
+                'data' => [
+                    'operational_cards' => [
+                        'messages_recent_total',
+                        'attempts_recent_total',
+                        'operational_failures_total',
+                        'retry_scheduled_total',
+                        'fallback_scheduled_total',
+                        'fallback_executed_total',
+                        'boundary_rejections_total',
+                        'pending_queue_total',
+                    ],
+                ],
+            ]);
+    }
+
+    public function test_local_operational_api_without_panel_cookie_remains_blocked(): void
+    {
+        config()->set('app.env', 'local');
+        config()->set('tenancy.identification.local_browser_domain_suffix', 'sistema-barbearia.localhost');
+
+        $tenant = $this->provisionTenant(
+            slug: 'barbearia-whatsapp-panel-local-guest',
+            domain: 'barbearia-whatsapp-panel-local-guest.tenant.test',
+        );
+
+        $this->getJson($this->tenantLocalBrowserApiUrl($tenant, '/operations/whatsapp/summary'))
+            ->assertUnauthorized()
+            ->assertJsonPath('message', 'Token de acesso ausente ou invalido.');
+    }
+
     public function test_user_without_operational_permission_cannot_log_in_to_the_panel(): void
     {
         $tenant = $this->provisionTenant(
@@ -178,17 +274,56 @@ class TenantWhatsappOperationsPanelTest extends TestCase
 
     private function cookieValue(\Illuminate\Testing\TestResponse $response, string $name): ?string
     {
+        return $this->cookieFromResponse($response, $name)?->getValue();
+    }
+
+    private function panelLocalBrowserUrl(Tenant $tenant): string
+    {
+        return sprintf('http://%s/painel/operacoes/whatsapp', $this->tenantLocalBrowserHost($tenant));
+    }
+
+    private function panelLocalBrowserLoginUrl(Tenant $tenant): string
+    {
+        return sprintf('http://%s/painel/operacoes/whatsapp/login', $this->tenantLocalBrowserHost($tenant));
+    }
+
+    private function tenantLocalBrowserApiUrl(Tenant $tenant, string $path): string
+    {
+        return sprintf('http://%s/api/v1%s', $this->tenantLocalBrowserHost($tenant), $path);
+    }
+
+    private function tenantLocalBrowserHost(Tenant $tenant): string
+    {
+        return sprintf(
+            '%s.%s',
+            $tenant->slug,
+            config('tenancy.identification.local_browser_domain_suffix', 'sistema-barbearia.localhost'),
+        );
+    }
+
+    private function cookieFromResponse(\Illuminate\Testing\TestResponse $response, string $name): ?Cookie
+    {
         /** @var array<int, Cookie> $cookies */
         $cookies = $response->headers->getCookies();
 
         foreach ($cookies as $cookie) {
             if ($cookie->getName() === $name) {
-                return $cookie->getValue();
+                return $cookie;
             }
         }
 
         return null;
     }
+
+    private function extractCsrfToken(string $html): ?string
+    {
+        if (! preg_match('/name="_token" value="([^"]+)"/', $html, $matches)) {
+            return null;
+        }
+
+        return $matches[1] ?? null;
+    }
+
 
     /**
      * @template TReturn

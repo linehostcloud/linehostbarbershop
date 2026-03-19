@@ -9,6 +9,9 @@ use App\Infrastructure\Integration\Whatsapp\WhatsappBoundaryRouteMatcher;
 use App\Infrastructure\Auth\TenantAuthContext;
 use App\Infrastructure\Auth\TenantPanelAccessTokenCookieFactory;
 use App\Infrastructure\Tenancy\TenantContext;
+use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Contracts\Encryption\Encrypter as EncrypterContract;
+use Illuminate\Cookie\CookieValuePrefix;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -21,6 +24,7 @@ class AuthenticateTenantAccessToken
         private readonly RecordBoundaryRejectionAuditAction $recordBoundaryRejectionAudit,
         private readonly WhatsappBoundaryRouteMatcher $routeMatcher,
         private readonly TenantPanelAccessTokenCookieFactory $cookieFactory,
+        private readonly EncrypterContract $encrypter,
     ) {}
 
     public function handle(Request $request, Closure $next): Response
@@ -112,9 +116,38 @@ class AuthenticateTenantAccessToken
             return null;
         }
 
+        return $this->resolvePanelCookieToken($request);
+    }
+
+    private function resolvePanelCookieToken(Request $request): ?string
+    {
         $cookieToken = trim((string) $request->cookie($this->cookieFactory->name(), ''));
 
-        return $cookieToken !== '' ? $cookieToken : null;
+        if ($cookieToken === '') {
+            return null;
+        }
+
+        [$tokenId, $plainToken] = array_pad(explode('|', $cookieToken, 2), 2, null);
+
+        if (filled($tokenId) && filled($plainToken)) {
+            return $cookieToken;
+        }
+
+        try {
+            $decryptedCookie = $this->encrypter->decrypt($cookieToken, false);
+        } catch (DecryptException) {
+            return null;
+        }
+
+        $validatedCookie = CookieValuePrefix::validate(
+            $this->cookieFactory->name(),
+            $decryptedCookie,
+            $this->encrypter->getAllKeys(),
+        );
+
+        return is_string($validatedCookie) && $validatedCookie !== ''
+            ? $validatedCookie
+            : null;
     }
 
     private function authenticationFailedResponse(Request $request): Response
