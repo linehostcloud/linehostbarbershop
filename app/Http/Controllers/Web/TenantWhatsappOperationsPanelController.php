@@ -24,14 +24,18 @@ class TenantWhatsappOperationsPanelController extends Controller
         abort_if($tenant === null || $user === null || $membership === null, 404);
         $canViewGovernance = $permissionMatrix->hasAbility($membership, 'whatsapp.automations.read')
             || $permissionMatrix->hasAbility($membership, 'whatsapp.agent.read');
+        $canViewRelationship = $permissionMatrix->hasAbility($membership, 'appointments.read')
+            || $permissionMatrix->hasAbility($membership, 'clients.read');
 
         return view('tenant.panel.whatsapp.operations', [
             'tenant' => $tenant,
             'user' => $user,
             'membership' => $membership,
             'navigation' => [
+                'relationship_url' => route('tenant.panel.whatsapp.relationship'),
                 'operations_url' => route('tenant.panel.whatsapp.operations'),
                 'governance_url' => route('tenant.panel.whatsapp.governance'),
+                'can_view_relationship' => $canViewRelationship,
                 'can_view_operations' => true,
                 'can_view_governance' => $canViewGovernance,
                 'active' => 'operations',

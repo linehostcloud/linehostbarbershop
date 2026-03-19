@@ -23,6 +23,18 @@ trait InteractsWithTenantWhatsappPanel
         return sprintf('http://%s/painel/operacoes/whatsapp/governanca', $domain);
     }
 
+    private function panelRelationshipUrl(Tenant $tenant, array $query = []): string
+    {
+        $domain = $tenant->domains()->value('domain');
+        $url = sprintf('http://%s/painel/gestao/whatsapp', $domain);
+
+        if ($query === []) {
+            return $url;
+        }
+
+        return $url.'?'.http_build_query($query);
+    }
+
     private function panelGovernanceAutomationUpdateUrl(Tenant $tenant, string $type): string
     {
         $domain = $tenant->domains()->value('domain');
@@ -49,6 +61,20 @@ trait InteractsWithTenantWhatsappPanel
         $domain = $tenant->domains()->value('domain');
 
         return sprintf('http://%s/painel/operacoes/whatsapp/governanca/agente/insights/%s/execute', $domain, $insightId);
+    }
+
+    private function panelRelationshipAppointmentReminderUrl(Tenant $tenant, string $appointmentId): string
+    {
+        $domain = $tenant->domains()->value('domain');
+
+        return sprintf('http://%s/painel/gestao/whatsapp/agendamentos/%s/lembrete', $domain, $appointmentId);
+    }
+
+    private function panelRelationshipClientReactivationUrl(Tenant $tenant, string $clientId): string
+    {
+        $domain = $tenant->domains()->value('domain');
+
+        return sprintf('http://%s/painel/gestao/whatsapp/clientes/%s/reativacao', $domain, $clientId);
     }
 
     private function panelLoginUrl(Tenant $tenant): string
@@ -137,6 +163,39 @@ trait InteractsWithTenantWhatsappPanel
                 'email' => $email,
                 'password' => $password,
             ]);
+    }
+
+    private function loginPanelAndGetCookie(Tenant $tenant, string $email, string $password): string
+    {
+        $response = $this->postPanelLogin($tenant, $email, $password);
+        $cookie = $this->cookieValue($response, (string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'));
+
+        $this->assertNotNull($cookie);
+
+        return (string) $cookie;
+    }
+
+    /**
+     * @return array{csrf:string,session:string}
+     */
+    private function panelFormContext(string $url, string $panelCookie): array
+    {
+        $response = $this
+            ->withUnencryptedCookie((string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'), $panelCookie)
+            ->get($url);
+
+        $response->assertOk();
+
+        $csrf = $this->extractCsrfToken((string) $response->getContent());
+        $sessionCookie = $this->cookieValue($response, (string) config('session.cookie'));
+
+        $this->assertNotNull($csrf);
+        $this->assertNotNull($sessionCookie);
+
+        return [
+            'csrf' => (string) $csrf,
+            'session' => (string) $sessionCookie,
+        ];
     }
 
     /**

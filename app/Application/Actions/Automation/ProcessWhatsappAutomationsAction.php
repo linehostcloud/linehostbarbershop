@@ -8,11 +8,8 @@ use App\Domain\Automation\Models\Automation;
 use App\Domain\Automation\Models\AutomationRun;
 use App\Domain\Automation\Models\AutomationRunTarget;
 use App\Domain\Client\Models\Client;
-use App\Domain\Communication\Models\Message;
-use App\Application\Actions\Communication\QueueWhatsappMessageAction;
 use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use Carbon\CarbonImmutable;
-use Illuminate\Support\Str;
 use Throwable;
 
 class ProcessWhatsappAutomationsAction
@@ -20,8 +17,7 @@ class ProcessWhatsappAutomationsAction
     public function __construct(
         private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaults,
         private readonly DiscoverWhatsappAutomationCandidatesAction $discoverCandidates,
-        private readonly QueueWhatsappMessageAction $queueWhatsappMessage,
-        private readonly RenderWhatsappAutomationMessageAction $renderMessage,
+        private readonly QueueWhatsappAutomationTargetAction $queueAutomationTarget,
         private readonly RecordWhatsappAutomationEventAction $recordEvent,
         private readonly TenantExecutionLockManager $lockManager,
     ) {
@@ -379,80 +375,17 @@ class ProcessWhatsappAutomationsAction
         ?Appointment $appointment,
         array $context,
     ): array {
-        $target = AutomationRunTarget::query()->create([
-            'id' => (string) Str::ulid(),
-            'automation_run_id' => $run->id,
-            'automation_id' => $automation->id,
-            'target_type' => $targetType,
-            'target_id' => $targetId,
-            'client_id' => $client?->id,
-            'appointment_id' => $appointment?->id,
-            'status' => 'processing',
-            'trigger_reason' => $triggerReason,
-            'context_json' => $this->targetContext($context),
-        ]);
-
-        try {
-            $rendered = $this->renderMessage->execute($automation, $context);
-            $payloadJson = array_merge($rendered['payload_json'], [
-                'automation' => [
-                    'type' => $automation->trigger_event,
-                    'run_id' => $run->id,
-                    'target_id' => $target->id,
-                    'trigger_reason' => $triggerReason,
-                    'target_reference' => [
-                        'type' => $targetType,
-                        'id' => $targetId,
-                    ],
-                ],
-            ]);
-
-            $message = $this->queueWhatsappMessage->execute([
-                'client_id' => $client?->id,
-                'appointment_id' => $appointment?->id,
-                'automation_id' => $automation->id,
-                'provider' => $rendered['provider'],
-                'type' => $rendered['type'],
-                'body_text' => $rendered['body_text'],
-                'payload_json' => $payloadJson,
-            ]);
-
-            $target->forceFill([
-                'message_id' => $message->id,
-                'status' => 'queued',
-                'skip_reason' => null,
-                'failure_reason' => null,
-                'cooldown_until' => now()->addHours(max(1, (int) $automation->cooldown_hours)),
-            ])->save();
-
-            return [
-                'queued' => true,
-                'failure_reason' => '',
-            ];
-        } catch (Throwable $throwable) {
-            $target->forceFill([
-                'status' => 'failed',
-                'failure_reason' => $throwable->getMessage(),
-            ])->save();
-
-            return [
-                'queued' => false,
-                'failure_reason' => $throwable->getMessage(),
-            ];
-        }
-    }
-
-    /**
-     * @param  array<string, mixed>  $context
-     */
-    private function targetContext(array $context): array
-    {
-        return array_filter([
-            'tenant' => data_get($context, 'tenant'),
-            'client' => data_get($context, 'client'),
-            'appointment' => data_get($context, 'appointment'),
-            'reactivation' => data_get($context, 'reactivation'),
-        ], static fn (mixed $value): bool => $value !== null);
+        return $this->queueAutomationTarget->execute(
+            automation: $automation,
+            run: $run,
+            targetType: $targetType,
+            targetId: $targetId,
+            triggerReason: $triggerReason,
+            client: $client,
+            appointment: $appointment,
+            context: $context,
+            triggerSource: 'automation',
+        );
     }
 
     /**

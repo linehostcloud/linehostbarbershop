@@ -316,8 +316,8 @@ class TenantWhatsappGovernancePanelTest extends TestCase
         $tenant = $this->provisionTenant('barbearia-governanca-blocked', 'barbearia-governanca-blocked.test');
         $user = $this->createTenantUser(
             tenant: $tenant,
-            role: 'receptionist',
-            email: 'governanca-blocked@test.local',
+            role: 'finance',
+            email: 'governanca-finance-blocked@test.local',
             password: 'password123',
         );
 

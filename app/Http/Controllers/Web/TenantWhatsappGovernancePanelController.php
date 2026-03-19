@@ -48,6 +48,10 @@ class TenantWhatsappGovernancePanelController extends Controller
             'operations' => [
                 'read' => $permissionMatrix->hasAbility($membership, 'whatsapp.operations.read'),
             ],
+            'relationship' => [
+                'read' => $permissionMatrix->hasAbility($membership, 'appointments.read')
+                    || $permissionMatrix->hasAbility($membership, 'clients.read'),
+            ],
         ];
 
         abort_unless($permissions['automations']['read'] || $permissions['agent']['read'], 403);
@@ -149,8 +153,10 @@ class TenantWhatsappGovernancePanelController extends Controller
             'agentRuns' => $agentRuns,
             'latestAgentRun' => $latestAgentRun,
             'navigation' => [
+                'relationship_url' => route('tenant.panel.whatsapp.relationship'),
                 'operations_url' => route('tenant.panel.whatsapp.operations'),
                 'governance_url' => route('tenant.panel.whatsapp.governance'),
+                'can_view_relationship' => $permissions['relationship']['read'],
                 'can_view_operations' => $permissions['operations']['read'],
                 'can_view_governance' => $permissions['automations']['read'] || $permissions['agent']['read'],
                 'active' => 'governance',

@@ -54,6 +54,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         $response
             ->assertOk()
             ->assertSee('Mensageria WhatsApp')
+            ->assertSee('Relacionamento')
             ->assertSee('Governança')
             ->assertSee('Resumo Operacional')
             ->assertSee('Execução Recorrente')
@@ -106,7 +107,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         $panelCookie = $this->cookieValue($loginResponse, $cookieName);
 
         $loginResponse
-            ->assertRedirect($this->panelLocalBrowserUrl($tenant));
+            ->assertRedirect(sprintf('http://%s/painel/gestao/whatsapp', $this->tenantLocalBrowserHost($tenant)));
 
         $this->assertNotNull($panelCookie);
         $this->assertSame(
@@ -170,7 +171,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
             ->assertJsonPath('message', 'Token de acesso ausente ou inválido.');
     }
 
-    public function test_user_without_operational_permission_cannot_log_in_to_the_panel(): void
+    public function test_user_without_any_panel_permission_cannot_log_in_to_the_panel(): void
     {
         $tenant = $this->provisionTenant(
             slug: 'barbearia-whatsapp-panel-forbidden',
@@ -178,8 +179,8 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         );
         $user = $this->createTenantUser(
             tenant: $tenant,
-            role: 'receptionist',
-            email: 'recepcao@barbearia-whatsapp-panel-forbidden.test',
+            role: 'finance',
+            email: 'financeiro@barbearia-whatsapp-panel-forbidden.test',
             password: 'password123',
         );
 
@@ -213,7 +214,7 @@ class TenantWhatsappOperationsPanelTest extends TestCase
         ]);
 
         $loginResponse = $this->postPanelLogin($tenant, $user->email, 'password123')
-            ->assertRedirect($this->panelUrl($tenant));
+            ->assertRedirect($this->panelRelationshipUrl($tenant));
 
         $panelCookie = $this->cookieValue($loginResponse, (string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'));
 

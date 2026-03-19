@@ -56,6 +56,198 @@ class DiscoverWhatsappAutomationCandidatesAction
         ];
     }
 
+    public function inspectAppointmentReminder(
+        Automation $automation,
+        Appointment $appointment,
+        CarbonImmutable $now,
+        bool $respectWindow = true,
+        bool $respectAlreadySent = true,
+    ): WhatsappAutomationCandidate {
+        $context = $this->appointmentAutomationContext($automation, $appointment, $now);
+        $excludedStatuses = array_values(array_filter(
+            (array) data_get($automation->conditions_json, 'excluded_statuses', ['canceled', 'no_show', 'completed']),
+            'is_string',
+        ));
+
+        if ($respectWindow && ! $this->appointmentInsideReminderWindow($automation, $appointment, $now)) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'appointment',
+                targetId: (string) $appointment->id,
+                triggerReason: 'appointment_due_soon',
+                skipReason: 'outside_reminder_window',
+                client: $appointment->client,
+                appointment: $appointment,
+                context: $context,
+            );
+        }
+
+        if (in_array((string) $appointment->status, $excludedStatuses, true) || $appointment->canceled_at !== null) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'appointment',
+                targetId: (string) $appointment->id,
+                triggerReason: 'appointment_due_soon',
+                skipReason: 'appointment_not_eligible',
+                client: $appointment->client,
+                appointment: $appointment,
+                context: $context,
+            );
+        }
+
+        if ($respectAlreadySent && $appointment->reminder_sent_at !== null) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'appointment',
+                targetId: (string) $appointment->id,
+                triggerReason: 'appointment_due_soon',
+                skipReason: 'reminder_already_sent',
+                client: $appointment->client,
+                appointment: $appointment,
+                context: $context,
+            );
+        }
+
+        if (($skipReason = $this->contactSkipReason($appointment->client, false)) !== null) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'appointment',
+                targetId: (string) $appointment->id,
+                triggerReason: 'appointment_due_soon',
+                skipReason: $skipReason,
+                client: $appointment->client,
+                appointment: $appointment,
+                context: $context,
+            );
+        }
+
+        if ($this->cooldownActive($automation, 'appointment', (string) $appointment->id, $now)) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'appointment',
+                targetId: (string) $appointment->id,
+                triggerReason: 'appointment_due_soon',
+                skipReason: 'cooldown_active',
+                client: $appointment->client,
+                appointment: $appointment,
+                context: $context,
+            );
+        }
+
+        return new WhatsappAutomationCandidate(
+            status: 'eligible',
+            targetType: 'appointment',
+            targetId: (string) $appointment->id,
+            triggerReason: 'appointment_due_soon',
+            skipReason: null,
+            client: $appointment->client,
+            appointment: $appointment,
+            context: $context,
+        );
+    }
+
+    public function inspectInactiveClientReactivation(
+        Automation $automation,
+        Client $client,
+        CarbonImmutable $now,
+    ): WhatsappAutomationCandidate {
+        $inactivityDays = (int) data_get($automation->conditions_json, 'inactivity_days', 45);
+        $minimumCompletedVisits = max(1, (int) data_get($automation->conditions_json, 'minimum_completed_visits', 1));
+        $requireMarketingOptIn = (bool) data_get($automation->conditions_json, 'require_marketing_opt_in', true);
+        $excludeWithFutureAppointments = (bool) data_get($automation->conditions_json, 'exclude_with_future_appointments', true);
+        $lastEngagementAt = $this->clientLastEngagementAt($client);
+        $contextFallback = $lastEngagementAt ?? $now;
+
+        if ($lastEngagementAt === null) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: 'no_visit_history',
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $contextFallback, $now),
+            );
+        }
+
+        if (($skipReason = $this->contactSkipReason($client, $requireMarketingOptIn)) !== null) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: $skipReason,
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+            );
+        }
+
+        if ($this->clientCompletedVisits($client) < $minimumCompletedVisits) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: 'insufficient_history',
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+            );
+        }
+
+        if ($excludeWithFutureAppointments && (int) ($client->future_appointments_count ?? 0) > 0) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: 'future_appointment_exists',
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+            );
+        }
+
+        if ($lastEngagementAt->diffInDays($now) < $inactivityDays) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: 'not_inactive_enough',
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+            );
+        }
+
+        if ($this->cooldownActive($automation, 'client', (string) $client->id, $now)) {
+            return new WhatsappAutomationCandidate(
+                status: 'skipped',
+                targetType: 'client',
+                targetId: (string) $client->id,
+                triggerReason: 'inactive_for_reactivation',
+                skipReason: 'cooldown_active',
+                client: $client,
+                appointment: null,
+                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+            );
+        }
+
+        return new WhatsappAutomationCandidate(
+            status: 'eligible',
+            targetType: 'client',
+            targetId: (string) $client->id,
+            triggerReason: 'inactive_for_reactivation',
+            skipReason: null,
+            client: $client,
+            appointment: null,
+            context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
+        );
+    }
+
     /**
      * @return Collection<int, WhatsappAutomationCandidate>
      */
@@ -64,14 +256,7 @@ class DiscoverWhatsappAutomationCandidatesAction
         CarbonImmutable $now,
         int $limit,
     ): Collection {
-        $leadTimeMinutes = (int) data_get($automation->conditions_json, 'lead_time_minutes', 1440);
-        $toleranceMinutes = (int) data_get($automation->conditions_json, 'selection_tolerance_minutes', config('communication.whatsapp.automations.selection_tolerance_minutes', 10));
-        $windowStart = $now->addMinutes($leadTimeMinutes)->subMinutes($toleranceMinutes);
-        $windowEnd = $now->addMinutes($leadTimeMinutes)->addMinutes($toleranceMinutes);
-        $excludedStatuses = array_values(array_filter(
-            (array) data_get($automation->conditions_json, 'excluded_statuses', ['canceled', 'no_show', 'completed']),
-            'is_string',
-        ));
+        [$windowStart, $windowEnd] = $this->appointmentReminderWindow($automation, $now);
         $overFetch = max($limit * 5, 25);
 
         $appointments = Appointment::query()
@@ -88,76 +273,7 @@ class DiscoverWhatsappAutomationCandidatesAction
                 break;
             }
 
-            if (in_array((string) $appointment->status, $excludedStatuses, true) || $appointment->canceled_at !== null) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'appointment',
-                    targetId: (string) $appointment->id,
-                    triggerReason: 'appointment_due_soon',
-                    skipReason: 'appointment_not_eligible',
-                    client: $appointment->client,
-                    appointment: $appointment,
-                    context: $this->appointmentAutomationContext($automation, $appointment, $now),
-                ));
-
-                continue;
-            }
-
-            if ($appointment->reminder_sent_at !== null) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'appointment',
-                    targetId: (string) $appointment->id,
-                    triggerReason: 'appointment_due_soon',
-                    skipReason: 'reminder_already_sent',
-                    client: $appointment->client,
-                    appointment: $appointment,
-                    context: $this->appointmentAutomationContext($automation, $appointment, $now),
-                ));
-
-                continue;
-            }
-
-            if (($skipReason = $this->contactSkipReason($appointment->client, false)) !== null) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'appointment',
-                    targetId: (string) $appointment->id,
-                    triggerReason: 'appointment_due_soon',
-                    skipReason: $skipReason,
-                    client: $appointment->client,
-                    appointment: $appointment,
-                    context: $this->appointmentAutomationContext($automation, $appointment, $now),
-                ));
-
-                continue;
-            }
-
-            if ($this->cooldownActive($automation, 'appointment', (string) $appointment->id, $now)) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'appointment',
-                    targetId: (string) $appointment->id,
-                    triggerReason: 'appointment_due_soon',
-                    skipReason: 'cooldown_active',
-                    client: $appointment->client,
-                    appointment: $appointment,
-                    context: $this->appointmentAutomationContext($automation, $appointment, $now),
-                ));
-
-                continue;
-            }
-
-            $candidates->push(new WhatsappAutomationCandidate(
-                status: 'eligible',
-                targetType: 'appointment',
-                targetId: (string) $appointment->id,
-                triggerReason: 'appointment_due_soon',
-                skipReason: null,
-                client: $appointment->client,
-                appointment: $appointment,
-                context: $this->appointmentAutomationContext($automation, $appointment, $now),
-            ));
+            $candidates->push($this->inspectAppointmentReminder($automation, $appointment, $now));
         }
 
         return $candidates;
@@ -171,10 +287,6 @@ class DiscoverWhatsappAutomationCandidatesAction
         CarbonImmutable $now,
         int $limit,
     ): Collection {
-        $inactivityDays = (int) data_get($automation->conditions_json, 'inactivity_days', 45);
-        $minimumCompletedVisits = max(1, (int) data_get($automation->conditions_json, 'minimum_completed_visits', 1));
-        $requireMarketingOptIn = (bool) data_get($automation->conditions_json, 'require_marketing_opt_in', true);
-        $excludeWithFutureAppointments = (bool) data_get($automation->conditions_json, 'exclude_with_future_appointments', true);
         $overFetch = max($limit * 5, 50);
 
         $clients = $this->reactivationBaseQuery($now)
@@ -188,112 +300,65 @@ class DiscoverWhatsappAutomationCandidatesAction
                 break;
             }
 
-            $lastEngagementAt = $this->clientLastEngagementAt($client);
-            $completedVisits = $this->clientCompletedVisits($client);
-
-            if ($lastEngagementAt === null) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'client',
-                    targetId: (string) $client->id,
-                    triggerReason: 'inactive_for_reactivation',
-                    skipReason: 'no_visit_history',
-                    client: $client,
-                    appointment: null,
-                    context: $this->clientReactivationContext($automation, $client, $now, $now),
-                ));
-
-                continue;
-            }
-
-            if (($skipReason = $this->contactSkipReason($client, $requireMarketingOptIn)) !== null) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'client',
-                    targetId: (string) $client->id,
-                    triggerReason: 'inactive_for_reactivation',
-                    skipReason: $skipReason,
-                    client: $client,
-                    appointment: null,
-                    context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
-                ));
-
-                continue;
-            }
-
-            if ($completedVisits < $minimumCompletedVisits) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'client',
-                    targetId: (string) $client->id,
-                    triggerReason: 'inactive_for_reactivation',
-                    skipReason: 'insufficient_history',
-                    client: $client,
-                    appointment: null,
-                    context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
-                ));
-
-                continue;
-            }
-
-            if ($excludeWithFutureAppointments && (int) ($client->future_appointments_count ?? 0) > 0) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'client',
-                    targetId: (string) $client->id,
-                    triggerReason: 'inactive_for_reactivation',
-                    skipReason: 'future_appointment_exists',
-                    client: $client,
-                    appointment: null,
-                    context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
-                ));
-
-                continue;
-            }
-
-            if ($lastEngagementAt->diffInDays($now) < $inactivityDays) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'client',
-                    targetId: (string) $client->id,
-                    triggerReason: 'inactive_for_reactivation',
-                    skipReason: 'not_inactive_enough',
-                    client: $client,
-                    appointment: null,
-                    context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
-                ));
-
-                continue;
-            }
-
-            if ($this->cooldownActive($automation, 'client', (string) $client->id, $now)) {
-                $candidates->push(new WhatsappAutomationCandidate(
-                    status: 'skipped',
-                    targetType: 'client',
-                    targetId: (string) $client->id,
-                    triggerReason: 'inactive_for_reactivation',
-                    skipReason: 'cooldown_active',
-                    client: $client,
-                    appointment: null,
-                    context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
-                ));
-
-                continue;
-            }
-
-            $candidates->push(new WhatsappAutomationCandidate(
-                status: 'eligible',
-                targetType: 'client',
-                targetId: (string) $client->id,
-                triggerReason: 'inactive_for_reactivation',
-                skipReason: null,
-                client: $client,
-                appointment: null,
-                context: $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now),
-            ));
+            $candidates->push($this->inspectInactiveClientReactivation($automation, $client, $now));
         }
 
         return $candidates;
+    }
+
+    /**
+     * @return array{0:CarbonImmutable,1:CarbonImmutable}
+     */
+    public function appointmentReminderWindow(Automation $automation, CarbonImmutable $now): array
+    {
+        $leadTimeMinutes = (int) data_get($automation->conditions_json, 'lead_time_minutes', 1440);
+        $toleranceMinutes = (int) data_get($automation->conditions_json, 'selection_tolerance_minutes', config('communication.whatsapp.automations.selection_tolerance_minutes', 10));
+
+        return [
+            $now->addMinutes($leadTimeMinutes)->subMinutes($toleranceMinutes),
+            $now->addMinutes($leadTimeMinutes)->addMinutes($toleranceMinutes),
+        ];
+    }
+
+    public function appointmentContext(
+        Automation $automation,
+        Appointment $appointment,
+        CarbonImmutable $now,
+    ): array {
+        return $this->appointmentAutomationContext($automation, $appointment, $now);
+    }
+
+    public function clientReactivationContextFromClient(
+        Automation $automation,
+        Client $client,
+        CarbonImmutable $now,
+    ): array {
+        $lastEngagementAt = $this->clientLastEngagementAt($client) ?? $now;
+
+        return $this->clientReactivationContext($automation, $client, $lastEngagementAt, $now);
+    }
+
+    public function loadClientForReactivation(Client $client, CarbonImmutable $now): Client
+    {
+        return $this->reactivationBaseQuery($now)
+            ->whereKey($client->getKey())
+            ->firstOrFail();
+    }
+
+    public function appointmentInsideReminderWindow(
+        Automation $automation,
+        Appointment $appointment,
+        CarbonImmutable $now,
+    ): bool {
+        if ($appointment->starts_at === null) {
+            return false;
+        }
+
+        [$windowStart, $windowEnd] = $this->appointmentReminderWindow($automation, $now);
+        $startsAt = CarbonImmutable::instance($appointment->starts_at);
+
+        return $startsAt->greaterThanOrEqualTo($windowStart)
+            && $startsAt->lessThanOrEqualTo($windowEnd);
     }
 
     private function cooldownActive(

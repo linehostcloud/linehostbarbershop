@@ -34,13 +34,18 @@ class TenantWhatsappOperationsPanelLoginController extends Controller
 
         $canReadOperations = in_array('whatsapp.operations.read', $result->grantedAbilities, true)
             || in_array('*', $result->grantedAbilities, true);
+        $canReadRelationship = in_array('appointments.read', $result->grantedAbilities, true)
+            || in_array('appointments.*', $result->grantedAbilities, true)
+            || in_array('clients.read', $result->grantedAbilities, true)
+            || in_array('clients.*', $result->grantedAbilities, true)
+            || in_array('*', $result->grantedAbilities, true);
         $canReadGovernance = in_array('whatsapp.automations.read', $result->grantedAbilities, true)
             || in_array('whatsapp.agent.read', $result->grantedAbilities, true)
             || in_array('whatsapp.automations.*', $result->grantedAbilities, true)
             || in_array('whatsapp.agent.*', $result->grantedAbilities, true)
             || in_array('*', $result->grantedAbilities, true);
 
-        if (! $canReadOperations && ! $canReadGovernance) {
+        if (! $canReadRelationship && ! $canReadOperations && ! $canReadGovernance) {
             $revokeTenantAccessToken->execute($result->accessToken);
 
             return response()->view('tenant.panel.whatsapp.login-forbidden', [
@@ -48,8 +53,12 @@ class TenantWhatsappOperationsPanelLoginController extends Controller
             ], 403);
         }
 
+        $redirectRoute = $canReadRelationship
+            ? 'tenant.panel.whatsapp.relationship'
+            : ($canReadOperations ? 'tenant.panel.whatsapp.operations' : 'tenant.panel.whatsapp.governance');
+
         return redirect()
-            ->route($canReadOperations ? 'tenant.panel.whatsapp.operations' : 'tenant.panel.whatsapp.governance')
+            ->route($redirectRoute)
             ->cookie($cookieFactory->make($result->plainTextToken, $result->accessToken->expires_at, $request));
     }
 }

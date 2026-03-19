@@ -31,6 +31,9 @@ class QueueWhatsappMessageAction
         $resolvedProvider = $this->providerResolver->resolveForOutbound($payload['provider'] ?? null);
         $tenantId = (string) $this->tenantContext->current()?->id;
         $type = (string) ($payload['type'] ?? 'text');
+        $triggerSource = is_string($payload['trigger_source'] ?? null) && $payload['trigger_source'] !== ''
+            ? (string) $payload['trigger_source']
+            : 'api';
 
         if (! in_array($type, ['text', 'template', 'media'], true)) {
             throw new RuntimeException(sprintf('Tipo de mensagem WhatsApp "%s" nao suportado.', $type));
@@ -43,7 +46,7 @@ class QueueWhatsappMessageAction
             $capability,
         );
 
-        $message = DB::connection($connection)->transaction(function () use ($client, $payload, $resolvedProvider, $tenantId, $type) {
+        $message = DB::connection($connection)->transaction(function () use ($client, $payload, $resolvedProvider, $tenantId, $type, $triggerSource) {
             $provider = $resolvedProvider->configuration->provider;
             $retryProfile = $resolvedProvider->configuration->retryProfile();
             $deduplication = $this->generateDeduplicationKey->execute(
@@ -86,7 +89,7 @@ class QueueWhatsappMessageAction
                 eventName: 'whatsapp.message.queued',
                 aggregateType: 'message',
                 aggregateId: $message->id,
-                triggerSource: 'api',
+                triggerSource: $triggerSource,
                 payload: [
                     'message_id' => $message->id,
                     'client_id' => $message->client_id,
