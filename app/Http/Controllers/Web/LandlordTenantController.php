@@ -2,18 +2,24 @@
 
 namespace App\Http\Controllers\Web;
 
-use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
+use App\Application\Actions\Tenancy\AddLandlordTenantDomainAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
+use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Application\Actions\Tenancy\ProvisionTenantFromLandlordPanelAction;
 use App\Application\Actions\Tenancy\RunLandlordTenantSchemaSyncAction;
+use App\Application\Actions\Tenancy\SetLandlordTenantPrimaryDomainAction;
+use App\Application\Actions\Tenancy\UpdateLandlordTenantBasicsAction;
 use App\Domain\Tenant\Models\Tenant;
+use App\Domain\Tenant\Models\TenantDomain;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Web\StoreLandlordTenantDomainRequest;
 use App\Http\Requests\Web\StoreLandlordTenantRequest;
+use App\Http\Requests\Web\UpdateLandlordTenantBasicsRequest;
 use App\Models\User;
-use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\View\View;
 use Throwable;
 
@@ -92,6 +98,104 @@ class LandlordTenantController extends Controller
                 'active' => 'tenants',
             ],
         ]);
+    }
+
+    public function updateBasics(
+        UpdateLandlordTenantBasicsRequest $request,
+        Tenant $tenant,
+        UpdateLandlordTenantBasicsAction $updateTenantBasics,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+
+        try {
+            $result = $updateTenantBasics->execute(
+                tenant: $tenant,
+                actor: $actor,
+                input: $request->validated(),
+            );
+        } catch (Throwable $throwable) {
+            return back()
+                ->withInput()
+                ->with('status', [
+                    'type' => 'error',
+                    'message' => $throwable->getMessage(),
+                ]);
+        }
+
+        return redirect()
+            ->route('landlord.tenants.show', $tenant)
+            ->with('status', [
+                'type' => 'success',
+                'message' => $result['changed']
+                    ? sprintf('Dados básicos do tenant "%s" atualizados com sucesso.', $tenant->fresh()->trade_name)
+                    : sprintf('Nenhuma alteração foi aplicada aos dados básicos do tenant "%s".', $tenant->trade_name),
+            ]);
+    }
+
+    public function storeDomain(
+        StoreLandlordTenantDomainRequest $request,
+        Tenant $tenant,
+        AddLandlordTenantDomainAction $addTenantDomain,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+
+        try {
+            $result = $addTenantDomain->execute(
+                tenant: $tenant,
+                actor: $actor,
+                input: $request->validated(),
+            );
+        } catch (Throwable $throwable) {
+            return back()
+                ->withInput()
+                ->with('status', [
+                    'type' => 'error',
+                    'message' => $throwable->getMessage(),
+                ]);
+        }
+
+        return redirect()
+            ->route('landlord.tenants.show', $tenant)
+            ->with('status', [
+                'type' => 'success',
+                'message' => $result['became_primary']
+                    ? sprintf('Domínio "%s" adicionado e definido como principal do tenant "%s".', $result['domain']->domain, $tenant->trade_name)
+                    : sprintf('Domínio "%s" adicionado ao tenant "%s".', $result['domain']->domain, $tenant->trade_name),
+            ]);
+    }
+
+    public function setPrimaryDomain(
+        Request $request,
+        Tenant $tenant,
+        TenantDomain $domain,
+        SetLandlordTenantPrimaryDomainAction $setPrimaryDomain,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+        abort_unless($domain->tenant_id === $tenant->id, 404);
+
+        try {
+            $result = $setPrimaryDomain->execute($tenant, $domain, $actor);
+        } catch (Throwable $throwable) {
+            return back()->with('status', [
+                'type' => 'error',
+                'message' => $throwable->getMessage(),
+            ]);
+        }
+
+        return redirect()
+            ->route('landlord.tenants.show', $tenant)
+            ->with('status', [
+                'type' => 'success',
+                'message' => $result['changed']
+                    ? sprintf('Domínio principal do tenant "%s" atualizado para "%s".', $tenant->trade_name, $domain->domain)
+                    : sprintf('O domínio "%s" já era o principal do tenant "%s".', $domain->domain, $tenant->trade_name),
+            ]);
     }
 
     public function syncSchema(

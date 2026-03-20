@@ -2,9 +2,9 @@
 
 use App\Http\Controllers\Web\LandlordSessionController;
 use App\Http\Controllers\Web\LandlordTenantController;
-use App\Http\Controllers\Web\TenantWhatsappAppointmentReminderController;
-use App\Http\Controllers\Web\TenantWhatsappAppointmentConfirmationController;
 use App\Http\Controllers\Web\TenantWhatsappAgentGovernanceController;
+use App\Http\Controllers\Web\TenantWhatsappAppointmentConfirmationController;
+use App\Http\Controllers\Web\TenantWhatsappAppointmentReminderController;
 use App\Http\Controllers\Web\TenantWhatsappAutomationGovernanceController;
 use App\Http\Controllers\Web\TenantWhatsappClientReactivationController;
 use App\Http\Controllers\Web\TenantWhatsappClientReactivationSnoozeController;
@@ -32,6 +32,12 @@ Route::middleware('landlord.central')->prefix((string) config('landlord.panel.pa
         Route::get('/tenants/novo', [LandlordTenantController::class, 'create'])->name('landlord.tenants.create');
         Route::post('/tenants', [LandlordTenantController::class, 'store'])->name('landlord.tenants.store');
         Route::get('/tenants/{tenant}', [LandlordTenantController::class, 'show'])->name('landlord.tenants.show');
+        Route::patch('/tenants/{tenant}/dados-basicos', [LandlordTenantController::class, 'updateBasics'])
+            ->name('landlord.tenants.update-basics');
+        Route::post('/tenants/{tenant}/dominios', [LandlordTenantController::class, 'storeDomain'])
+            ->name('landlord.tenants.domains.store');
+        Route::post('/tenants/{tenant}/dominios/{domain}/principal', [LandlordTenantController::class, 'setPrimaryDomain'])
+            ->name('landlord.tenants.domains.set-primary');
         Route::post('/tenants/{tenant}/schema/sincronizar', [LandlordTenantController::class, 'syncSchema'])
             ->name('landlord.tenants.sync-schema');
         Route::post('/tenants/{tenant}/automacoes/defaults', [LandlordTenantController::class, 'ensureDefaultAutomations'])
