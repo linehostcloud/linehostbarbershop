@@ -201,6 +201,13 @@ class BuildLandlordTenantRecentActivityAction
             $parts[] = sprintf('Motivo: %s.', $reason);
         }
 
+        if (is_numeric($metadata['revoked_access_token_count'] ?? null)) {
+            $count = (int) $metadata['revoked_access_token_count'];
+            $parts[] = $count > 0
+                ? sprintf('Tokens/sessoes revogados: %d.', $count)
+                : 'Nenhum token ativo precisou ser revogado.';
+        }
+
         return $parts !== []
             ? implode(' ', $parts)
             : 'Status do tenant atualizado.';

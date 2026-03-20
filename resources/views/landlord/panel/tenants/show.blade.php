@@ -9,6 +9,7 @@
     @php($tenantOnboardingTransitionErrors = $errors->getBag('tenantOnboardingTransition'))
     @php($statusGovernance = $tenant['state_governance']['status'])
     @php($onboardingGovernance = $tenant['state_governance']['onboarding_stage'])
+    @php($suspensionObservability = $tenant['suspension_observability'])
 
     <div class="mx-auto max-w-7xl space-y-6">
         <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 lg:flex-row lg:items-start lg:justify-between">
@@ -160,6 +161,64 @@
                                 Nenhuma atividade administrativa recente foi registrada para este tenant.
                             </div>
                         @endforelse
+                    </div>
+                </div>
+
+                <div class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl shadow-slate-950/20">
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <h2 class="text-lg font-semibold text-white">Hardening da suspensão</h2>
+                            <p class="mt-1 text-sm text-slate-400">
+                                Sessões revogadas e pressão recente de bloqueios na borda WhatsApp.
+                            </p>
+                        </div>
+                        <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200">
+                            {{ $suspensionObservability['boundary']['window_label'] }}
+                        </span>
+                    </div>
+
+                    <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Tokens ativos</p>
+                            <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['access_tokens']['active_count'] }}</p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">Sessões/tokens ainda válidos hoje para este tenant.</p>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Revogados na última suspensão</p>
+                            <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['access_tokens']['last_revoked_count'] ?? '—' }}</p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">
+                                Último evento em {{ $suspensionObservability['access_tokens']['last_revoked_at'] ?: 'não registrado' }}.
+                            </p>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Outbound bloqueado</p>
+                            <p class="mt-3 text-2xl font-semibold text-white">
+                                {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'outbound')['count'] ?? 0 }}
+                            </p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">
+                                Última ocorrência em {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'outbound')['last_seen_at'] ?? 'não registrada' }}.
+                            </p>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Webhooks ignorados</p>
+                            <p class="mt-3 text-2xl font-semibold text-white">
+                                {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'webhook')['count'] ?? 0 }}
+                            </p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">
+                                Última ocorrência em {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'webhook')['last_seen_at'] ?? 'não registrada' }}.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 rounded-2xl border {{ $suspensionObservability['boundary']['recurring'] ? 'border-amber-500/30 bg-amber-500/10 text-amber-100' : 'border-slate-800 bg-slate-950/60 text-slate-300' }} p-4 text-sm">
+                        <p class="font-semibold">{{ $suspensionObservability['boundary']['recurring_label'] }}</p>
+                        <p class="mt-2 text-xs leading-5 {{ $suspensionObservability['boundary']['recurring'] ? 'text-amber-50/90' : 'text-slate-400' }}">
+                            Total auditado na borda: {{ $suspensionObservability['boundary']['total_count'] }} evento(s).
+                            {{ $suspensionObservability['webhook_policy']['detail'] }}
+                        </p>
                     </div>
                 </div>
 

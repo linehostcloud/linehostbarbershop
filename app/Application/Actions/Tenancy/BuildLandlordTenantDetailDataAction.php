@@ -12,6 +12,7 @@ class BuildLandlordTenantDetailDataAction
         private readonly BuildLandlordTenantOperationalHealthAction $buildOperationalHealth,
         private readonly BuildLandlordTenantRecentActivityAction $buildRecentActivity,
         private readonly BuildLandlordTenantStateGovernanceAction $buildStateGovernance,
+        private readonly BuildLandlordTenantSuspensionObservabilityAction $buildSuspensionObservability,
     ) {}
 
     /**
@@ -54,6 +55,7 @@ class BuildLandlordTenantDetailDataAction
             'operational' => $operational,
             'recent_activity' => $this->buildRecentActivity->execute($tenant),
             'state_governance' => $this->buildStateGovernance->execute($tenant, $summary, $operational),
+            'suspension_observability' => $this->buildSuspensionObservability->execute($tenant),
         ]);
     }
 }

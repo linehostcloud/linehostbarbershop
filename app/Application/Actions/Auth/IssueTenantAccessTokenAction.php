@@ -2,6 +2,7 @@
 
 namespace App\Application\Actions\Auth;
 
+use App\Application\Actions\Tenancy\EnsureTenantOperationalAccessAction;
 use App\Application\DTOs\IssuedTenantAccessToken;
 use App\Domain\Auth\Models\UserAccessToken;
 use App\Domain\Tenant\Models\Tenant;
@@ -12,11 +13,17 @@ use RuntimeException;
 
 class IssueTenantAccessTokenAction
 {
+    public function __construct(
+        private readonly EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $context
      */
     public function execute(User $user, Tenant $tenant, array $context = []): IssuedTenantAccessToken
     {
+        $this->ensureTenantOperationalAccess->execute($tenant);
+
         $membership = $user->memberships()
             ->where('tenant_id', $tenant->id)
             ->first();

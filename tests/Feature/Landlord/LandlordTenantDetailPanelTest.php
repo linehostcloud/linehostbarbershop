@@ -4,13 +4,16 @@ namespace Tests\Feature\Landlord;
 
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Domain\Auth\Models\AuditLog;
+use App\Domain\Auth\Models\UserAccessToken;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
+use App\Domain\Observability\Models\BoundaryRejectionAudit;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Models\User;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
@@ -125,6 +128,106 @@ class LandlordTenantDetailPanelTest extends TestCase
             ->assertDontSee('nao-deve-aparecer.audit.test');
     }
 
+    public function test_landlord_tenant_detail_displays_suspension_observability_summary(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-hardening', 'barbearia-hardening.saas.test');
+        $otherTenant = $this->provisionTenant('barbearia-hardening-externa', 'barbearia-hardening-externa.saas.test');
+        $user = $this->createTenantUser($tenant, email: 'gestor-hardening@test.local');
+        $this->issueTenantAccessToken($tenant, $user);
+
+        $this->recordLandlordAuditLog(
+            tenant: $tenant,
+            actor: $admin,
+            action: 'landlord_tenant.status_changed',
+            before: [
+                'status' => 'active',
+            ],
+            after: [
+                'status' => 'suspended',
+            ],
+            metadata: [
+                'from' => 'active',
+                'to' => 'suspended',
+                'reason' => 'Suspensao para observabilidade.',
+                'revoked_access_token_count' => 3,
+            ],
+        );
+
+        foreach (range(1, 3) as $index) {
+            BoundaryRejectionAudit::query()->create([
+                'tenant_id' => $tenant->id,
+                'tenant_slug' => $tenant->slug,
+                'direction' => 'outbound',
+                'endpoint' => '/api/v1/messages/whatsapp',
+                'method' => 'POST',
+                'host' => $tenant->domains()->value('domain'),
+                'code' => 'security_policy_violation',
+                'message' => 'Tenant suspenso.',
+                'http_status' => 423,
+                'correlation_id' => (string) Str::uuid(),
+                'context_json' => [
+                    'tenant_status' => 'suspended',
+                    'operational_channel' => 'outbound',
+                    'enforcement_outcome' => 'blocked',
+                ],
+                'occurred_at' => now()->subHours($index),
+            ]);
+        }
+
+        foreach (range(1, 2) as $index) {
+            BoundaryRejectionAudit::query()->create([
+                'tenant_id' => $tenant->id,
+                'tenant_slug' => $tenant->slug,
+                'direction' => 'webhook',
+                'endpoint' => '/webhooks/whatsapp/fake',
+                'method' => 'POST',
+                'host' => $tenant->domains()->value('domain'),
+                'code' => 'security_policy_violation',
+                'message' => 'Tenant suspenso.',
+                'http_status' => 202,
+                'correlation_id' => (string) Str::uuid(),
+                'context_json' => [
+                    'tenant_status' => 'suspended',
+                    'operational_channel' => 'webhook',
+                    'enforcement_outcome' => 'ignored_without_processing',
+                ],
+                'occurred_at' => now()->subHours($index + 3),
+            ]);
+        }
+
+        BoundaryRejectionAudit::query()->create([
+            'tenant_id' => $otherTenant->id,
+            'tenant_slug' => $otherTenant->slug,
+            'direction' => 'outbound',
+            'endpoint' => '/api/v1/messages/whatsapp',
+            'method' => 'POST',
+            'host' => $otherTenant->domains()->value('domain'),
+            'code' => 'security_policy_violation',
+            'message' => 'Tenant suspenso.',
+            'http_status' => 423,
+            'correlation_id' => (string) Str::uuid(),
+            'context_json' => [
+                'tenant_status' => 'suspended',
+                'operational_channel' => 'outbound',
+                'enforcement_outcome' => 'blocked',
+            ],
+            'occurred_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.show', $tenant))
+            ->assertOk()
+            ->assertSee('Hardening da suspensão')
+            ->assertSee('Tokens ativos')
+            ->assertSee('Revogados na última suspensão')
+            ->assertSee('Outbound bloqueado')
+            ->assertSee('Webhooks ignorados')
+            ->assertSee('Recorrência detectada na borda WhatsApp durante a suspensão.')
+            ->assertSee('Total auditado na borda: 5 evento(s).')
+            ->assertDontSee('Total auditado na borda: 6 evento(s).');
+    }
+
     public function test_landlord_can_update_tenant_basics_via_detail_panel(): void
     {
         $admin = $this->createLandlordAdmin();
@@ -188,6 +291,9 @@ class LandlordTenantDetailPanelTest extends TestCase
         $admin = $this->createLandlordAdmin();
         $tenant = $this->provisionTenant('barbearia-status', 'barbearia-status.saas.test');
         $otherTenant = $this->provisionTenant('barbearia-status-intocada', 'barbearia-status-intocada.saas.test');
+        $user = $this->createTenantUser($tenant, email: 'owner-status@test.local');
+        $this->issueTenantAccessToken($tenant, $user);
+        $this->issueTenantAccessToken($tenant, $user);
 
         $this->actingAs($admin)
             ->followingRedirects()
@@ -199,7 +305,8 @@ class LandlordTenantDetailPanelTest extends TestCase
             ->assertOk()
             ->assertSee('Status do tenant &quot;Barbearia Status&quot; atualizado para &quot;suspenso&quot;.', false)
             ->assertSee('Status do tenant atualizado')
-            ->assertSee('Motivo: Suspensao administrativa para revisar a operacao.');
+            ->assertSee('Motivo: Suspensao administrativa para revisar a operacao.')
+            ->assertSee('Tokens/sessoes revogados: 2.');
 
         $tenant->refresh();
         $otherTenant->refresh();
@@ -207,6 +314,7 @@ class LandlordTenantDetailPanelTest extends TestCase
         $this->assertSame('suspended', $tenant->status);
         $this->assertNotNull($tenant->suspended_at);
         $this->assertSame('active', $otherTenant->status);
+        $this->assertSame(0, UserAccessToken::query()->where('tenant_id', $tenant->id)->count());
 
         $auditLog = AuditLog::query()
             ->where('action', 'landlord_tenant.status_changed')
@@ -219,6 +327,7 @@ class LandlordTenantDetailPanelTest extends TestCase
         $this->assertSame('active', data_get($auditLog->metadata_json, 'from'));
         $this->assertSame('suspended', data_get($auditLog->metadata_json, 'to'));
         $this->assertSame('Suspensao administrativa para revisar a operacao.', data_get($auditLog->metadata_json, 'reason'));
+        $this->assertSame(2, data_get($auditLog->metadata_json, 'revoked_access_token_count'));
     }
 
     public function test_landlord_status_transition_blocks_invalid_target_for_current_state(): void

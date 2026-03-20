@@ -21,6 +21,7 @@ use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Schema;
 
@@ -43,6 +44,31 @@ if (! function_exists('resolveTenantCommandTargets')) {
             )
             ->orderBy('slug')
             ->get();
+    }
+}
+
+if (! function_exists('ensureOperationalTenantCommandAccess')) {
+    function ensureOperationalTenantCommandAccess(
+        Tenant $tenant,
+        EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+        string $commandName,
+    ): bool {
+        try {
+            $ensureTenantOperationalAccess->execute($tenant);
+
+            return true;
+        } catch (TenantOperationalAccessDenied $exception) {
+            Log::notice('Tenant operational runtime command skipped.', [
+                'tenant_id' => $tenant->getKey(),
+                'tenant_slug' => $tenant->slug,
+                'tenant_status' => $tenant->status,
+                'operational_channel' => 'command',
+                'command_name' => $commandName,
+                'skip_reason' => 'tenant_status_runtime_enforcement',
+            ]);
+
+            return false;
+        }
     }
 }
 
@@ -227,10 +253,8 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
     ];
 
     foreach ($tenants as $tenant) {
-        try {
-            $ensureTenantOperationalAccess->execute($tenant);
-        } catch (TenantOperationalAccessDenied $exception) {
-            $this->warn(sprintf('[%s] %s', $tenant->slug, $exception->getMessage()));
+        if (! ensureOperationalTenantCommandAccess($tenant, $ensureTenantOperationalAccess, 'tenancy:process-outbox')) {
+            $this->warn(sprintf('[%s] O tenant esta suspenso e o processamento do outbox foi ignorado.', $tenant->slug));
 
             continue;
         }
@@ -432,10 +456,8 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
     ];
 
     foreach ($tenants as $tenant) {
-        try {
-            $ensureTenantOperationalAccess->execute($tenant);
-        } catch (TenantOperationalAccessDenied $exception) {
-            $this->warn(sprintf('[%s] %s', $tenant->slug, $exception->getMessage()));
+        if (! ensureOperationalTenantCommandAccess($tenant, $ensureTenantOperationalAccess, 'tenancy:process-whatsapp-automations')) {
+            $this->warn(sprintf('[%s] O tenant esta suspenso e as automacoes foram ignoradas.', $tenant->slug));
 
             continue;
         }
@@ -507,10 +529,8 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
     ];
 
     foreach ($tenants as $tenant) {
-        try {
-            $ensureTenantOperationalAccess->execute($tenant);
-        } catch (TenantOperationalAccessDenied $exception) {
-            $this->warn(sprintf('[%s] %s', $tenant->slug, $exception->getMessage()));
+        if (! ensureOperationalTenantCommandAccess($tenant, $ensureTenantOperationalAccess, 'tenancy:run-whatsapp-agent')) {
+            $this->warn(sprintf('[%s] O tenant esta suspenso e a execucao do agente foi ignorada.', $tenant->slug));
 
             continue;
         }

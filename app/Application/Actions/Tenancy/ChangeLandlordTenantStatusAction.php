@@ -3,6 +3,7 @@
 namespace App\Application\Actions\Tenancy;
 
 use App\Application\Actions\Auth\RecordAuditLogAction;
+use App\Application\Actions\Auth\RevokeTenantAccessTokensAction;
 use App\Domain\Tenant\Models\Tenant;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,7 @@ class ChangeLandlordTenantStatusAction
     public function __construct(
         private readonly BuildLandlordTenantStateGovernanceAction $buildStateGovernance,
         private readonly RecordAuditLogAction $recordAuditLog,
+        private readonly RevokeTenantAccessTokensAction $revokeTenantAccessTokens,
     ) {}
 
     /**
@@ -43,6 +45,7 @@ class ChangeLandlordTenantStatusAction
                     'activated_at' => $tenant->activated_at?->toIso8601String(),
                     'suspended_at' => $tenant->suspended_at?->toIso8601String(),
                 ];
+                $revokedAccessTokenCount = 0;
 
                 $attributes = match ($targetStatus) {
                     'active' => [
@@ -59,6 +62,10 @@ class ChangeLandlordTenantStatusAction
 
                 $tenant->forceFill($attributes);
                 $tenant->save();
+
+                if ($targetStatus === 'suspended') {
+                    $revokedAccessTokenCount = $this->revokeTenantAccessTokens->execute($tenant);
+                }
 
                 $this->recordAuditLog->execute(
                     action: 'landlord_tenant.status_changed',
@@ -77,6 +84,9 @@ class ChangeLandlordTenantStatusAction
                         'reason' => $reason,
                         'from' => $before['status'],
                         'to' => $tenant->status,
+                        ...($targetStatus === 'suspended'
+                            ? ['revoked_access_token_count' => $revokedAccessTokenCount]
+                            : []),
                     ],
                 );
 

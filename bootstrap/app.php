@@ -16,6 +16,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\ValidationException;
 
@@ -68,31 +69,63 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $exceptions->render(function (TenantOperationalAccessDenied $exception, Request $request) {
             $matcher = app(WhatsappBoundaryRouteMatcher::class);
+            $isWebhook = $matcher->isWebhook($request);
+            $isOutbound = $matcher->isOutbound($request);
+            $operationalChannel = $isWebhook
+                ? 'webhook'
+                : ($isOutbound ? 'outbound' : ($request->is('api/*') ? 'api' : 'web'));
+            $responseStatus = $isWebhook ? 202 : 423;
+            $responseState = $isWebhook ? 'ignored' : 'rejected';
+
+            Log::notice('Tenant operational access denied.', [
+                'tenant_id' => $exception->tenant->getKey(),
+                'tenant_slug' => $exception->tenant->slug,
+                'tenant_status' => $exception->tenant->status,
+                'operational_channel' => $operationalChannel,
+                'route_name' => $request->route()?->getName(),
+                'endpoint' => $request->route()?->uri() ?: $request->path(),
+                'method' => $request->getMethod(),
+                'host' => $request->getHost(),
+                'source_ip' => $request->ip(),
+                'http_status' => $responseStatus,
+            ]);
 
             if ($matcher->matches($request)) {
                 app(RecordBoundaryRejectionAuditAction::class)->execute(
                     request: $request,
                     code: WhatsappBoundaryRejectionCode::SecurityPolicyViolation,
                     message: $exception->getMessage(),
-                    httpStatus: 423,
+                    httpStatus: $responseStatus,
                     direction: $matcher->direction($request),
                     context: [
                         'tenant_status' => $exception->tenant->status,
                         'tenant_id' => $exception->tenant->getKey(),
                         'tenant_slug' => $exception->tenant->slug,
+                        'operational_channel' => $operationalChannel,
+                        'enforcement_outcome' => $isWebhook ? 'ignored_without_processing' : 'blocked',
+                        'enforcement_policy' => 'tenant_status_runtime_enforcement',
                     ],
                     exception: $exception,
                 );
             }
 
             if ($request->expectsJson() || $request->is('api/*') || $request->is('webhooks/*')) {
+                if ($isWebhook) {
+                    return response()->json([
+                        'status' => 'ignored',
+                        'boundary_rejection_code' => WhatsappBoundaryRejectionCode::SecurityPolicyViolation->value,
+                        'message' => 'Webhook ignorado com seguranca porque o tenant esta suspenso.',
+                        'tenant_status' => $exception->tenant->status,
+                    ], 202);
+                }
+
                 if ($matcher->matches($request)) {
                     return response()->json([
-                        'status' => 'rejected',
+                        'status' => $responseState,
                         'boundary_rejection_code' => WhatsappBoundaryRejectionCode::SecurityPolicyViolation->value,
                         'message' => $exception->getMessage(),
                         'tenant_status' => $exception->tenant->status,
-                    ], 423);
+                    ], $responseStatus);
                 }
 
                 return response()->json([
