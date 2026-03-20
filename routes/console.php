@@ -2,20 +2,23 @@
 
 use App\Application\Actions\Agent\RunScheduledWhatsappAgentAction;
 use App\Application\Actions\Automation\RunScheduledWhatsappAutomationsAction;
+use App\Application\Actions\Observability\ProcessOutboxEventAction;
 use App\Application\Actions\Observability\ReclaimStaleOutboxEventsAction;
 use App\Application\Actions\Observability\RunWhatsappOperationalHousekeepingAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
+use App\Application\Actions\Tenancy\EnsureTenantOperationalAccessAction;
 use App\Application\Actions\Tenancy\MigrateTenantSchemaAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Observability\Models\OutboxEvent;
 use App\Domain\Tenant\Models\Tenant;
-use App\Application\Actions\Observability\ProcessOutboxEventAction;
 use App\Infrastructure\Integration\Whatsapp\WhatsappProviderConfigValidator;
 use App\Infrastructure\Integration\Whatsapp\WhatsappProviderRegistry;
+use App\Infrastructure\Tenancy\Exceptions\TenantOperationalAccessDenied;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use Illuminate\Foundation\Inspiring;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
@@ -24,7 +27,7 @@ use Illuminate\Support\Facades\Schema;
 if (! function_exists('resolveTenantCommandTargets')) {
     /**
      * @param  list<string>  $tenantIdentifiers
-     * @return \Illuminate\Support\Collection<int, Tenant>
+     * @return Collection<int, Tenant>
      */
     function resolveTenantCommandTargets(array $tenantIdentifiers)
     {
@@ -36,7 +39,7 @@ if (! function_exists('resolveTenantCommandTargets')) {
                         ->whereIn('id', $tenantIdentifiers)
                         ->orWhereIn('slug', $tenantIdentifiers);
                 }),
-                fn ($query) => $query->where('status', 'active'),
+                fn ($query) => $query->whereIn('status', Tenant::runtimeEnabledStatuses()),
             )
             ->orderBy('slug')
             ->get();
@@ -201,6 +204,7 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
     TenantDatabaseManager $databaseManager,
     ProcessOutboxEventAction $processOutboxEvent,
     ReclaimStaleOutboxEventsAction $reclaimStaleOutboxEvents,
+    EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $limit = max(1, (int) $this->option('limit'));
@@ -223,6 +227,14 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
     ];
 
     foreach ($tenants as $tenant) {
+        try {
+            $ensureTenantOperationalAccess->execute($tenant);
+        } catch (TenantOperationalAccessDenied $exception) {
+            $this->warn(sprintf('[%s] %s', $tenant->slug, $exception->getMessage()));
+
+            continue;
+        }
+
         $databaseManager->connect($tenant);
 
         try {
@@ -397,6 +409,7 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
 Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou ULIDs de tenants especificos} {--type=* : Tipos especificos de automacao} {--limit=100 : Quantidade maxima de candidatos por automacao}', function (
     TenantDatabaseManager $databaseManager,
     RunScheduledWhatsappAutomationsAction $runScheduledWhatsappAutomations,
+    EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $types = array_values(array_filter((array) $this->option('type'), 'is_string'));
@@ -419,6 +432,14 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
     ];
 
     foreach ($tenants as $tenant) {
+        try {
+            $ensureTenantOperationalAccess->execute($tenant);
+        } catch (TenantOperationalAccessDenied $exception) {
+            $this->warn(sprintf('[%s] %s', $tenant->slug, $exception->getMessage()));
+
+            continue;
+        }
+
         $databaseManager->connect($tenant);
 
         try {
@@ -464,6 +485,7 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
 Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de tenants especificos}', function (
     TenantDatabaseManager $databaseManager,
     RunScheduledWhatsappAgentAction $runScheduledWhatsappAgent,
+    EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $tenants = resolveTenantCommandTargets($tenantIdentifiers);
@@ -485,6 +507,14 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
     ];
 
     foreach ($tenants as $tenant) {
+        try {
+            $ensureTenantOperationalAccess->execute($tenant);
+        } catch (TenantOperationalAccessDenied $exception) {
+            $this->warn(sprintf('[%s] %s', $tenant->slug, $exception->getMessage()));
+
+            continue;
+        }
+
         $databaseManager->connect($tenant);
 
         try {

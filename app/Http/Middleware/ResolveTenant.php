@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Application\Actions\Tenancy\EnsureTenantOperationalAccessAction;
 use App\Infrastructure\Tenancy\Exceptions\TenantCouldNotBeResolved;
 use App\Infrastructure\Tenancy\Resolvers\RequestTenantResolver;
 use App\Infrastructure\Tenancy\TenantContext;
@@ -16,8 +17,8 @@ class ResolveTenant
         private readonly RequestTenantResolver $resolver,
         private readonly TenantContext $tenantContext,
         private readonly TenantDatabaseManager $databaseManager,
-    ) {
-    }
+        private readonly EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+    ) {}
 
     public function handle(Request $request, Closure $next): Response
     {
@@ -28,6 +29,7 @@ class ResolveTenant
         }
 
         $this->tenantContext->set($tenant);
+        $this->ensureTenantOperationalAccess->execute($tenant);
         $this->databaseManager->connect($tenant);
 
         return $next($request);

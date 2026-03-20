@@ -1,14 +1,17 @@
 <?php
 
 use App\Application\Actions\Observability\RecordBoundaryRejectionAuditAction;
-use App\Http\Middleware\ResolveTenant;
-use App\Http\Middleware\EnsureCentralDomain;
-use App\Http\Middleware\AuthorizeLandlordAdmin;
+use App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode;
+use App\Domain\Communication\Enums\WhatsappProviderErrorCode;
 use App\Http\Middleware\AuthenticateTenantAccessToken;
+use App\Http\Middleware\AuthorizeLandlordAdmin;
 use App\Http\Middleware\AuthorizeTenantAbility;
+use App\Http\Middleware\EnsureCentralDomain;
+use App\Http\Middleware\ResolveTenant;
 use App\Infrastructure\Integration\Whatsapp\BoundaryRejectionCodeResolver;
 use App\Infrastructure\Integration\Whatsapp\WhatsappBoundaryRouteMatcher;
 use App\Infrastructure\Tenancy\Exceptions\TenantCouldNotBeResolved;
+use App\Infrastructure\Tenancy\Exceptions\TenantOperationalAccessDenied;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -44,7 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($matcher->matches($request)) {
                 app(RecordBoundaryRejectionAuditAction::class)->execute(
                     request: $request,
-                    code: \App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode::TenantUnresolved,
+                    code: WhatsappBoundaryRejectionCode::TenantUnresolved,
                     message: $exception->getMessage(),
                     httpStatus: 404,
                     direction: $matcher->direction($request),
@@ -55,12 +58,52 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->expectsJson() || $request->is('api/*') || $request->is('webhooks/*')) {
                 return response()->json([
                     'status' => 'rejected',
-                    'boundary_rejection_code' => \App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode::TenantUnresolved->value,
+                    'boundary_rejection_code' => WhatsappBoundaryRejectionCode::TenantUnresolved->value,
                     'message' => $exception->getMessage(),
                 ], 404);
             }
 
             return response($exception->getMessage(), 404);
+        });
+
+        $exceptions->render(function (TenantOperationalAccessDenied $exception, Request $request) {
+            $matcher = app(WhatsappBoundaryRouteMatcher::class);
+
+            if ($matcher->matches($request)) {
+                app(RecordBoundaryRejectionAuditAction::class)->execute(
+                    request: $request,
+                    code: WhatsappBoundaryRejectionCode::SecurityPolicyViolation,
+                    message: $exception->getMessage(),
+                    httpStatus: 423,
+                    direction: $matcher->direction($request),
+                    context: [
+                        'tenant_status' => $exception->tenant->status,
+                        'tenant_id' => $exception->tenant->getKey(),
+                        'tenant_slug' => $exception->tenant->slug,
+                    ],
+                    exception: $exception,
+                );
+            }
+
+            if ($request->expectsJson() || $request->is('api/*') || $request->is('webhooks/*')) {
+                if ($matcher->matches($request)) {
+                    return response()->json([
+                        'status' => 'rejected',
+                        'boundary_rejection_code' => WhatsappBoundaryRejectionCode::SecurityPolicyViolation->value,
+                        'message' => $exception->getMessage(),
+                        'tenant_status' => $exception->tenant->status,
+                    ], 423);
+                }
+
+                return response()->json([
+                    'message' => $exception->getMessage(),
+                    'tenant_status' => $exception->tenant->status,
+                ], 423);
+            }
+
+            return response()->view('tenant.panel.whatsapp.tenant-suspended', [
+                'tenant' => $exception->tenant,
+            ], 423);
         });
 
         $exceptions->render(function (ValidationException $exception, Request $request) {
@@ -86,7 +129,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
             return response()->json([
                 'status' => 'rejected',
-                'normalized_error_code' => \App\Domain\Communication\Enums\WhatsappProviderErrorCode::ValidationError->value,
+                'normalized_error_code' => WhatsappProviderErrorCode::ValidationError->value,
                 'message' => $exception->getMessage(),
                 'boundary_rejection_code' => $code->value,
                 'errors' => $exception->errors(),

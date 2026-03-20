@@ -16,6 +16,11 @@ class Tenant extends LandlordModel
     /**
      * @var list<string>
      */
+    public const RUNTIME_ENABLED_STATUSES = ['active', 'trial'];
+
+    /**
+     * @var list<string>
+     */
     protected $fillable = [
         'legal_name',
         'trade_name',
@@ -72,5 +77,23 @@ class Tenant extends LandlordModel
         }
 
         return Crypt::decryptString($this->database_password_encrypted);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function runtimeEnabledStatuses(): array
+    {
+        return self::RUNTIME_ENABLED_STATUSES;
+    }
+
+    public function allowsOperationalRuntime(): bool
+    {
+        return in_array((string) $this->status, self::RUNTIME_ENABLED_STATUSES, true);
+    }
+
+    public function blocksOperationalRuntime(): bool
+    {
+        return ! $this->allowsOperationalRuntime();
     }
 }
