@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Web\LandlordSessionController;
+use App\Http\Controllers\Web\LandlordTenantController;
 use App\Http\Controllers\Web\TenantWhatsappAppointmentReminderController;
 use App\Http\Controllers\Web\TenantWhatsappAppointmentConfirmationController;
 use App\Http\Controllers\Web\TenantWhatsappAgentGovernanceController;
@@ -16,6 +18,25 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('welcome');
+});
+
+Route::middleware('landlord.central')->prefix((string) config('landlord.panel.path_prefix', 'painel/saas'))->group(function (): void {
+    Route::get('/login', [LandlordSessionController::class, 'create'])->name('login');
+    Route::post('/login', [LandlordSessionController::class, 'store'])->name('landlord.login.store');
+    Route::post('/logout', [LandlordSessionController::class, 'destroy'])
+        ->middleware('auth')
+        ->name('landlord.logout');
+
+    Route::middleware(['auth', 'landlord.admin'])->group(function (): void {
+        Route::get('/tenants', [LandlordTenantController::class, 'index'])->name('landlord.tenants.index');
+        Route::get('/tenants/novo', [LandlordTenantController::class, 'create'])->name('landlord.tenants.create');
+        Route::post('/tenants', [LandlordTenantController::class, 'store'])->name('landlord.tenants.store');
+        Route::get('/tenants/{tenant}', [LandlordTenantController::class, 'show'])->name('landlord.tenants.show');
+        Route::post('/tenants/{tenant}/schema/sincronizar', [LandlordTenantController::class, 'syncSchema'])
+            ->name('landlord.tenants.sync-schema');
+        Route::post('/tenants/{tenant}/automacoes/defaults', [LandlordTenantController::class, 'ensureDefaultAutomations'])
+            ->name('landlord.tenants.ensure-default-automations');
+    });
 });
 
 Route::middleware('tenant.resolve')->group(function (): void {

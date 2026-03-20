@@ -4,9 +4,9 @@ use App\Application\Actions\Agent\RunScheduledWhatsappAgentAction;
 use App\Application\Actions\Automation\RunScheduledWhatsappAutomationsAction;
 use App\Application\Actions\Observability\ReclaimStaleOutboxEventsAction;
 use App\Application\Actions\Observability\RunWhatsappOperationalHousekeepingAction;
+use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\MigrateTenantSchemaAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
-use App\Application\DTOs\TenantProvisioningData;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Observability\Models\OutboxEvent;
 use App\Domain\Tenant\Models\Tenant;
@@ -152,29 +152,22 @@ Artisan::command('tenancy:provision-tenant
     {--owner-password= : Senha inicial do owner. Se omitido, sera gerada}', function (
     string $slug,
     string $tradeName,
+    BuildTenantProvisioningDataAction $buildProvisioningData,
     ProvisionTenantAction $provisionTenant,
 ) {
-    $localBrowserSuffix = ltrim((string) config('tenancy.identification.local_browser_domain_suffix', ''), '.');
-    $defaultSuffix = app()->environment('local') && $localBrowserSuffix !== ''
-        ? $localBrowserSuffix
-        : ltrim((string) config('tenancy.provisioning.default_domain_suffix', 'sistema-barbearia.localhost'), '.');
-
-    $domain = $this->option('domain')
-        ?: sprintf('%s.%s', $slug, $defaultSuffix);
-
-    $data = new TenantProvisioningData(
-        slug: $slug,
-        tradeName: $tradeName,
-        legalName: $this->option('legal-name') ?: $tradeName,
-        domain: $domain,
-        databaseName: $this->option('database-name') ?: null,
-        timezone: (string) $this->option('timezone'),
-        currency: (string) $this->option('currency'),
-        planCode: (string) $this->option('plan'),
-        ownerName: $this->option('owner-name') ?: null,
-        ownerEmail: $this->option('owner-email') ?: null,
-        ownerPassword: $this->option('owner-password') ?: null,
-    );
+    $data = $buildProvisioningData->execute([
+        'slug' => $slug,
+        'trade_name' => $tradeName,
+        'legal_name' => $this->option('legal-name') ?: $tradeName,
+        'domain' => $this->option('domain') ?: null,
+        'database_name' => $this->option('database-name') ?: null,
+        'timezone' => (string) $this->option('timezone'),
+        'currency' => (string) $this->option('currency'),
+        'plan_code' => (string) $this->option('plan'),
+        'owner_name' => $this->option('owner-name') ?: null,
+        'owner_email' => $this->option('owner-email') ?: null,
+        'owner_password' => $this->option('owner-password') ?: null,
+    ]);
 
     try {
         $result = $provisionTenant->execute($data);

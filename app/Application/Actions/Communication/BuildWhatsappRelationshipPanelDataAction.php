@@ -3,8 +3,9 @@
 namespace App\Application\Actions\Communication;
 
 use App\Application\Actions\Appointment\DetermineManualAppointmentConfirmationEligibilityAction;
+use App\Application\Actions\Automation\BuildWhatsappAutomationDefaultAttributesAction;
 use App\Application\Actions\Automation\DiscoverWhatsappAutomationCandidatesAction;
-use App\Application\Actions\Automation\EnsureDefaultWhatsappAutomationsAction;
+use App\Application\Support\WhatsappRelationshipMetricsPeriod;
 use App\Domain\Appointment\Models\Appointment;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
@@ -19,7 +20,7 @@ class BuildWhatsappRelationshipPanelDataAction
 {
     public function __construct(
         private readonly BuildWhatsappRelationshipMetricsAction $buildMetrics,
-        private readonly EnsureDefaultWhatsappAutomationsAction $ensureDefaults,
+        private readonly BuildWhatsappAutomationDefaultAttributesAction $buildAutomationDefaults,
         private readonly DiscoverWhatsappAutomationCandidatesAction $discoverCandidates,
         private readonly DetermineManualAppointmentConfirmationEligibilityAction $determineConfirmationEligibility,
         private readonly WhatsappRelationshipViewFactory $viewFactory,
@@ -90,6 +91,7 @@ class BuildWhatsappRelationshipPanelDataAction
                         appointment: $appointment,
                         latestConfirmationMessage: $latestConfirmationMessage,
                         now: $now,
+                        automation: $appointmentAutomation,
                     );
 
                     return $this->viewFactory->appointmentItem(
@@ -138,7 +140,7 @@ class BuildWhatsappRelationshipPanelDataAction
             'filters' => [
                 'date' => $selectedDate->toDateString(),
                 'date_label' => $selectedDate->format('d/m/Y'),
-                'period' => $this->periodFilter($filters['period'] ?? null),
+                'period' => WhatsappRelationshipMetricsPeriod::fromInput($filters['period'] ?? null)->value,
             ],
             'sections' => [
                 'appointments' => (bool) ($visibility['appointments']['read'] ?? false),
@@ -149,7 +151,7 @@ class BuildWhatsappRelationshipPanelDataAction
                 appointmentAutomation: $appointmentAutomation,
                 reactivationAutomation: $reactivationAutomation,
                 filters: [
-                    'period' => $this->periodFilter($filters['period'] ?? null),
+                    'period' => WhatsappRelationshipMetricsPeriod::fromInput($filters['period'] ?? null)->value,
                 ],
                 visibility: $visibility,
             ),
@@ -170,21 +172,13 @@ class BuildWhatsappRelationshipPanelDataAction
         ];
     }
 
-    private function periodFilter(mixed $value): string
-    {
-        return in_array($value, ['today', '7d', '30d'], true)
-            ? (string) $value
-            : '7d';
-    }
-
     private function automation(WhatsappAutomationType $type): Automation
     {
-        return $this->ensureDefaults->execute()
-            ->firstWhere('trigger_event', $type->value)
-            ?? Automation::query()
-                ->where('channel', 'whatsapp')
-                ->where('trigger_event', $type->value)
-                ->firstOrFail();
+        return Automation::query()
+            ->where('channel', 'whatsapp')
+            ->where('trigger_event', $type->value)
+            ->first()
+            ?? new Automation($this->buildAutomationDefaults->execute($type));
     }
 
     private function selectedDate(array $filters, Tenant $tenant): CarbonImmutable
@@ -214,9 +208,9 @@ class BuildWhatsappRelationshipPanelDataAction
      * @param  list<string>  $appointmentIds
      * @return array{reminder:Collection<string, Message>,confirmation:Collection<string, Message>}
      */
-    private function latestAppointmentMessages(array $appointmentIds, string $automationId): array
+    private function latestAppointmentMessages(array $appointmentIds, ?string $automationId): array
     {
-        if ($appointmentIds === []) {
+        if ($appointmentIds === [] || ! is_string($automationId) || $automationId === '') {
             return [
                 'reminder' => collect(),
                 'confirmation' => collect(),
@@ -263,9 +257,9 @@ class BuildWhatsappRelationshipPanelDataAction
      * @param  list<string>  $clientIds
      * @return Collection<string, Message>
      */
-    private function latestMessagesByClientForAutomation(array $clientIds, string $automationId): Collection
+    private function latestMessagesByClientForAutomation(array $clientIds, ?string $automationId): Collection
     {
-        if ($clientIds === []) {
+        if ($clientIds === [] || ! is_string($automationId) || $automationId === '') {
             return collect();
         }
 

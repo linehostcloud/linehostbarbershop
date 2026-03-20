@@ -32,8 +32,9 @@ class DetermineManualAppointmentConfirmationEligibilityAction
         Appointment $appointment,
         ?Message $latestConfirmationMessage = null,
         ?CarbonImmutable $now = null,
+        ?Automation $automation = null,
     ): array {
-        $automation = $this->automation();
+        $automation ??= $this->automation();
         $appointment->loadMissing(['client', 'professional', 'primaryService']);
         $now ??= CarbonImmutable::now();
         $latestConfirmationMessage ??= $this->latestConfirmationMessage($appointment, $automation);

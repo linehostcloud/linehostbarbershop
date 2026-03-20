@@ -17,8 +17,7 @@ class ProvisionTenantActionTest extends TestCase
 
     public function test_it_provisions_a_tenant_database_domain_and_owner(): void
     {
-        $databaseName = 'tenant_barbearia_centro.sqlite';
-        $this->trackTenantDatabase($databaseName);
+        $databaseName = $this->trackTenantDatabase('tenant_barbearia_centro.sqlite');
 
         $result = app(ProvisionTenantAction::class)->execute(new TenantProvisioningData(
             slug: 'barbearia-centro',

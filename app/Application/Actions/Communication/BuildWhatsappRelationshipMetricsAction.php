@@ -2,6 +2,7 @@
 
 namespace App\Application\Actions\Communication;
 
+use App\Application\Support\WhatsappRelationshipMetricsPeriod;
 use App\Domain\Appointment\Models\Appointment;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Automation\Models\Automation;
@@ -23,6 +24,7 @@ class BuildWhatsappRelationshipMetricsAction
      *         selected:string,
      *         label:string,
      *         help:string,
+     *         timezone:string,
      *         from:string,
      *         to:string,
      *         options:list<array{value:string,label:string}>
@@ -45,30 +47,35 @@ class BuildWhatsappRelationshipMetricsAction
         array $filters,
         array $visibility,
     ): array {
-        $period = $this->periodWindow($filters['period'] ?? null, $tenant);
+        $timezone = $tenant->timezone ?: config('app.timezone', 'UTC');
+        $period = WhatsappRelationshipMetricsPeriod::fromInput($filters['period'] ?? null)->window($timezone);
         $cards = [];
         $hasInferredCards = false;
         $relevantFailures = 0;
 
         if (($visibility['appointments']['read'] ?? false) === true) {
-            $appointmentMessages = $this->appointmentMessages($appointmentAutomation->id);
+            $appointmentMessages = $this->appointmentMessagesForWindow(
+                automationId: $this->automationId($appointmentAutomation),
+                fromStorage: $period['from_storage'],
+                toStorage: $period['to_storage'],
+            );
             $reminderMessages = $appointmentMessages->reject(fn (Message $message): bool => $this->isConfirmationMessage($message))->values();
             $confirmationMessages = $appointmentMessages->filter(fn (Message $message): bool => $this->isConfirmationMessage($message))->values();
 
             $remindersQueued = $reminderMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->created_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->created_at, $period))
                 ->count();
             $remindersSent = $reminderMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->sent_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->sent_at, $period))
                 ->count();
             $manualConfirmationsSent = $confirmationMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->sent_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->sent_at, $period))
                 ->count();
             $relevantFailures += $reminderMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->failed_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->failed_at, $period))
                 ->count();
             $relevantFailures += $confirmationMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->failed_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->failed_at, $period))
                 ->count();
 
             $cards[] = $this->directCard(
@@ -94,7 +101,7 @@ class BuildWhatsappRelationshipMetricsAction
             );
 
             if ($remindersSent > 0) {
-                $confirmedAfterReminder = $this->confirmedAppointmentsAfterReminder($reminderMessages, $period['from'], $period['to']);
+                $confirmedAfterReminder = $this->confirmedAppointmentsAfterReminder($reminderMessages, $period);
                 $cards[] = $this->inferredCard(
                     key: 'reminder_confirmation_conversion',
                     label: 'Lembretes com confirmação registrada',
@@ -107,12 +114,16 @@ class BuildWhatsappRelationshipMetricsAction
         }
 
         if (($visibility['clients']['read'] ?? false) === true) {
-            $reactivationMessages = $this->reactivationMessages($reactivationAutomation->id);
+            $reactivationMessages = $this->reactivationMessagesForWindow(
+                automationId: $this->automationId($reactivationAutomation),
+                fromStorage: $period['from_storage'],
+                toStorage: $period['to_storage'],
+            );
             $reactivationsTriggered = $reactivationMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->created_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->created_at, $period))
                 ->count();
             $relevantFailures += $reactivationMessages
-                ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->failed_at, $period['from'], $period['to']))
+                ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->failed_at, $period))
                 ->count();
 
             $cards[] = $this->directCard(
@@ -125,13 +136,18 @@ class BuildWhatsappRelationshipMetricsAction
             $cards[] = $this->directCard(
                 key: 'reactivation_snoozes',
                 label: 'Clientes ignorados no período',
-                value: $this->reactivationSnoozesInPeriod($tenant, $period['from'], $period['to']),
+                value: $this->reactivationSnoozesInPeriod($tenant, $period),
                 help: sprintf('Ações de ignorar reativação por 7 dias registradas pelo gestor em %s.', $period['label']),
                 tone: 'muted',
             );
 
             if ($reactivationsTriggered > 0) {
-                $convertedClients = $this->clientsWithNewAppointmentAfterReactivation($reactivationMessages, $period['to']);
+                $convertedClients = $this->clientsWithNewAppointmentAfterReactivation(
+                    reactivationMessages: $reactivationMessages
+                        ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->created_at, $period))
+                        ->values(),
+                    toStorage: $period['to_storage'],
+                );
                 $cards[] = $this->inferredCard(
                     key: 'reactivation_appointment_conversion',
                     label: 'Reativações com novo agendamento',
@@ -160,9 +176,10 @@ class BuildWhatsappRelationshipMetricsAction
                 'selected' => $period['selected'],
                 'label' => $period['label'],
                 'help' => $period['help'],
-                'from' => $period['from']->format('d/m/Y H:i'),
-                'to' => $period['to']->format('d/m/Y H:i'),
-                'options' => $this->periodOptions(),
+                'timezone' => $period['timezone'],
+                'from' => $period['from_local']->format('d/m/Y H:i'),
+                'to' => $period['to_local']->format('d/m/Y H:i'),
+                'options' => WhatsappRelationshipMetricsPeriod::options(),
             ],
             'cards' => $cards,
             'has_inferred_cards' => $hasInferredCards,
@@ -170,91 +187,85 @@ class BuildWhatsappRelationshipMetricsAction
     }
 
     /**
-     * @return array{
-     *     selected:string,
-     *     label:string,
-     *     help:string,
-     *     from:CarbonImmutable,
-     *     to:CarbonImmutable
-     * }
-     */
-    private function periodWindow(mixed $value, Tenant $tenant): array
-    {
-        $timezone = $tenant->timezone ?: config('app.timezone', 'UTC');
-        $now = CarbonImmutable::now($timezone);
-        $selected = in_array($value, ['today', '7d', '30d'], true) ? (string) $value : '7d';
-
-        return match ($selected) {
-            'today' => [
-                'selected' => 'today',
-                'label' => 'hoje',
-                'help' => 'Indicadores acumulados no dia atual.',
-                'from' => $now->startOfDay(),
-                'to' => $now,
-            ],
-            '30d' => [
-                'selected' => '30d',
-                'label' => 'últimos 30 dias',
-                'help' => 'Indicadores acumulados nos últimos 30 dias corridos.',
-                'from' => $now->subDays(29)->startOfDay(),
-                'to' => $now,
-            ],
-            default => [
-                'selected' => '7d',
-                'label' => 'últimos 7 dias',
-                'help' => 'Indicadores acumulados nos últimos 7 dias corridos.',
-                'from' => $now->subDays(6)->startOfDay(),
-                'to' => $now,
-            ],
-        };
-    }
-
-    /**
-     * @return list<array{value:string,label:string}>
-     */
-    private function periodOptions(): array
-    {
-        return [
-            ['value' => 'today', 'label' => 'Hoje'],
-            ['value' => '7d', 'label' => 'Últimos 7 dias'],
-            ['value' => '30d', 'label' => 'Últimos 30 dias'],
-        ];
-    }
-
-    /**
      * @return Collection<int, Message>
      */
-    private function appointmentMessages(string $automationId): Collection
+    private function appointmentMessagesForWindow(
+        ?string $automationId,
+        CarbonImmutable $fromStorage,
+        CarbonImmutable $toStorage,
+    ): Collection
     {
+        if (! is_string($automationId) || $automationId === '') {
+            return collect();
+        }
+
         return Message::query()
+            ->select([
+                'id',
+                'appointment_id',
+                'client_id',
+                'status',
+                'payload_json',
+                'created_at',
+                'sent_at',
+                'failed_at',
+            ])
             ->where('automation_id', $automationId)
             ->whereNotNull('appointment_id')
             ->where('channel', 'whatsapp')
             ->where('direction', 'outbound')
+            ->where(function ($query) use ($fromStorage, $toStorage): void {
+                $query
+                    ->whereBetween('created_at', [$fromStorage, $toStorage])
+                    ->orWhereBetween('sent_at', [$fromStorage, $toStorage])
+                    ->orWhereBetween('failed_at', [$fromStorage, $toStorage]);
+            })
             ->get();
     }
 
     /**
      * @return Collection<int, Message>
      */
-    private function reactivationMessages(string $automationId): Collection
+    private function reactivationMessagesForWindow(
+        ?string $automationId,
+        CarbonImmutable $fromStorage,
+        CarbonImmutable $toStorage,
+    ): Collection
     {
+        if (! is_string($automationId) || $automationId === '') {
+            return collect();
+        }
+
         return Message::query()
+            ->select([
+                'id',
+                'client_id',
+                'status',
+                'payload_json',
+                'created_at',
+                'sent_at',
+                'failed_at',
+            ])
             ->where('automation_id', $automationId)
             ->whereNotNull('client_id')
             ->whereNull('appointment_id')
             ->where('channel', 'whatsapp')
             ->where('direction', 'outbound')
+            ->where(function ($query) use ($fromStorage, $toStorage): void {
+                $query
+                    ->whereBetween('created_at', [$fromStorage, $toStorage])
+                    ->orWhereBetween('sent_at', [$fromStorage, $toStorage])
+                    ->orWhereBetween('failed_at', [$fromStorage, $toStorage]);
+            })
             ->get();
     }
 
     private function confirmedAppointmentsAfterReminder(
         Collection $reminderMessages,
-        CarbonImmutable $from,
-        CarbonImmutable $to,
+        array $period,
     ): int {
         $appointmentIds = $reminderMessages
-            ->filter(fn (Message $message): bool => $this->isWithinPeriod($message->sent_at, $from, $to))
+            ->filter(fn (Message $message): bool => $this->isWithinStorageWindow($message->sent_at, $period))
             ->pluck('appointment_id')
             ->filter()
             ->unique()
@@ -271,7 +282,7 @@ class BuildWhatsappRelationshipMetricsAction
             ->count();
     }
 
-    private function clientsWithNewAppointmentAfterReactivation(Collection $reactivationMessages, CarbonImmutable $to): int
+    private function clientsWithNewAppointmentAfterReactivation(Collection $reactivationMessages, CarbonImmutable $toStorage): int
     {
         /** @var Collection<string, Message> $latestByClient */
         $latestByClient = $reactivationMessages
@@ -287,11 +298,12 @@ class BuildWhatsappRelationshipMetricsAction
         $appointments = Appointment::query()
             ->whereIn('client_id', $latestByClient->keys()->all())
             ->whereNotIn('status', ['canceled', 'no_show'])
+            ->where('created_at', '<=', $toStorage)
             ->orderBy('created_at')
             ->get(['id', 'client_id', 'created_at']);
 
         return $latestByClient
-            ->filter(function (Message $message) use ($appointments, $to): bool {
+            ->filter(function (Message $message) use ($appointments): bool {
                 if ($message->client_id === null || $message->created_at === null) {
                     return false;
                 }
@@ -299,19 +311,17 @@ class BuildWhatsappRelationshipMetricsAction
                 return $appointments
                     ->where('client_id', $message->client_id)
                     ->contains(fn (Appointment $appointment): bool => $appointment->created_at !== null
-                        && $appointment->created_at->greaterThan($message->created_at)
-                        && $this->isWithinPeriod($appointment->created_at, $message->created_at instanceof CarbonImmutable ? $message->created_at : CarbonImmutable::instance($message->created_at), $to));
+                        && $appointment->created_at->greaterThan($message->created_at));
             })
             ->count();
     }
 
-    private function reactivationSnoozesInPeriod(Tenant $tenant, CarbonImmutable $from, CarbonImmutable $to): int
+    private function reactivationSnoozesInPeriod(Tenant $tenant, array $period): int
     {
         return AuditLog::query()
             ->where('tenant_id', $tenant->id)
             ->where('action', 'whatsapp_product.client_reactivation.snoozed')
-            ->get()
-            ->filter(fn (AuditLog $audit): bool => $this->isWithinPeriod($audit->created_at, $from, $to))
+            ->whereBetween('created_at', [$period['from_storage'], $period['to_storage']])
             ->count();
     }
 
@@ -321,7 +331,7 @@ class BuildWhatsappRelationshipMetricsAction
             || data_get($message->payload_json, 'automation.trigger_reason') === 'manual_appointment_confirmation';
     }
 
-    private function isWithinPeriod(mixed $value, CarbonImmutable $from, CarbonImmutable $to): bool
+    private function isWithinStorageWindow(mixed $value, array $period): bool
     {
         if ($value === null) {
             return false;
@@ -331,7 +341,14 @@ class BuildWhatsappRelationshipMetricsAction
             ? $value
             : CarbonImmutable::instance($value);
 
-        return $timestamp->betweenIncluded($from, $to);
+        return $timestamp->betweenIncluded($period['from_storage'], $period['to_storage']);
+    }
+
+    private function automationId(Automation $automation): ?string
+    {
+        return is_string($automation->id) && $automation->id !== ''
+            ? $automation->id
+            : null;
     }
 
     /**

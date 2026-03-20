@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Web;
 
 use App\Application\Actions\Communication\BuildWhatsappRelationshipPanelDataAction;
+use App\Application\Support\WhatsappRelationshipMetricsPeriod;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Auth\TenantAuthContext;
 use App\Infrastructure\Auth\TenantPermissionMatrix;
@@ -53,7 +54,7 @@ class TenantWhatsappRelationshipPanelController extends Controller
             'panel' => $buildPanelData->execute(
                 filters: [
                     'date' => (string) $request->query('date', ''),
-                    'period' => (string) $request->query('period', ''),
+                    'period' => WhatsappRelationshipMetricsPeriod::fromInput($request->query('period'))->value,
                 ],
                 visibility: [
                     'appointments' => [

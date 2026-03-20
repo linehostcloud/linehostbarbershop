@@ -494,7 +494,7 @@ class TenantWhatsappRelationshipPanelTest extends TestCase
             $this->assertSame(1, $this->metricValue($weeklyPanel, 'reactivations_triggered'));
             $this->assertSame(1, $this->metricValue($weeklyPanel, 'reactivation_snoozes'));
             $this->assertSame(1, $this->metricValue($weeklyPanel, 'reminder_confirmation_conversion'));
-            $this->assertSame(2, $this->metricValue($weeklyPanel, 'reactivation_appointment_conversion'));
+            $this->assertSame(1, $this->metricValue($weeklyPanel, 'reactivation_appointment_conversion'));
 
             $monthlyResponse = $this
                 ->withUnencryptedCookie((string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'), $panelCookie)
@@ -507,6 +507,115 @@ class TenantWhatsappRelationshipPanelTest extends TestCase
             $this->assertSame(2, $this->metricValue($monthlyPanel, 'reminders_sent'));
             $this->assertSame(2, $this->metricValue($monthlyPanel, 'reactivations_triggered'));
             $this->assertSame(2, $this->metricValue($monthlyPanel, 'reactivation_snoozes'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_relationship_metrics_period_filter_falls_back_safely_to_last_7_days(): void
+    {
+        Carbon::setTestNow('2026-03-19 10:00:00');
+
+        try {
+            $tenant = $this->provisionTenant('barbearia-relacionamento-periodo-fallback', 'barbearia-relacionamento-periodo-fallback.test');
+            $user = $this->createTenantUser(
+                tenant: $tenant,
+                role: 'manager',
+                email: 'gestor-relacionamento-periodo-fallback@test.local',
+                password: 'password123',
+            );
+
+            $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+            $appointmentAutomationId = $this->activateAutomation($tenant, 'appointment_reminder', ['status' => 'active']);
+            [$clientId, $professionalId, $serviceId] = $this->createOperationalContext($tenant, 'Cliente Período Fallback', '+5511999998454');
+            $appointmentId = $this->createAppointment($tenant, $clientId, $professionalId, $serviceId, '2026-03-20 10:00:00');
+
+            $this->withTenantConnection($tenant, function () use ($appointmentAutomationId, $appointmentId, $clientId): void {
+                $this->seedRelationshipMessageMetric([
+                    'automation_id' => $appointmentAutomationId,
+                    'appointment_id' => $appointmentId,
+                    'client_id' => $clientId,
+                    'status' => 'queued',
+                    'payload_json' => [
+                        'automation' => [
+                            'type' => 'appointment_reminder',
+                            'trigger_reason' => 'appointment_due_soon',
+                        ],
+                    ],
+                    'created_at' => '2026-03-18 09:00:00',
+                ]);
+            });
+            $this->flushHeaders();
+
+            $panelCookie = $this->loginPanelAndGetCookie($tenant, $user->email, 'password123');
+
+            $response = $this
+                ->withUnencryptedCookie((string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'), $panelCookie)
+                ->get($this->panelRelationshipUrl($tenant, ['period' => 'invalido']));
+
+            $response->assertOk()
+                ->assertSee('Leitura resumida de últimos 7 dias')
+                ->assertSee('considerando o fuso');
+
+            $panel = $this->buildRelationshipPanelData($tenant, 'invalido');
+            $this->assertSame('7d', $panel['metrics']['period']['selected']);
+            $this->assertSame(1, $this->metricValue($panel, 'reminders_queued'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_relationship_get_does_not_backfill_whatsapp_automation_defaults(): void
+    {
+        Carbon::setTestNow('2026-03-19 10:00:00');
+
+        try {
+            $tenant = $this->provisionTenant('barbearia-relacionamento-sem-side-effect', 'barbearia-relacionamento-sem-side-effect.test');
+            $user = $this->createTenantUser(
+                tenant: $tenant,
+                role: 'manager',
+                email: 'gestor-relacionamento-sem-side-effect@test.local',
+                password: 'password123',
+            );
+
+            $this->withHeaders($this->tenantAuthHeaders($tenant, role: 'manager'));
+            $this->activateAutomation($tenant, 'appointment_reminder', ['status' => 'active']);
+            $this->activateAutomation($tenant, 'inactive_client_reactivation', ['status' => 'active']);
+            [$clientId, $professionalId, $serviceId] = $this->createOperationalContext($tenant, 'Cliente Sem Side Effect', '+5511999998455', marketingOptIn: true);
+            $this->createAppointment($tenant, $clientId, $professionalId, $serviceId, '2026-03-20 10:00:00');
+            $this->seedCompletedVisit($tenant, $clientId, $professionalId, $serviceId, '2026-01-10 14:00:00', '2026-01-10 15:00:00');
+
+            $this->withTenantConnection($tenant, function (): void {
+                Automation::query()
+                    ->where('channel', 'whatsapp')
+                    ->whereIn('trigger_event', ['appointment_reminder', 'inactive_client_reactivation'])
+                    ->get()
+                    ->each(function (Automation $automation): void {
+                        $automation->forceFill([
+                            'conditions_json' => [],
+                            'action_payload_json' => [],
+                        ])->save();
+                    });
+            });
+            $this->flushHeaders();
+
+            $panelCookie = $this->loginPanelAndGetCookie($tenant, $user->email, 'password123');
+
+            $this
+                ->withUnencryptedCookie((string) config('auth.access_tokens.panel_cookie', 'tenant_panel_access_token'), $panelCookie)
+                ->get($this->panelRelationshipUrl($tenant))
+                ->assertOk();
+
+            $this->withTenantConnection($tenant, function (): void {
+                $automations = Automation::query()
+                    ->where('channel', 'whatsapp')
+                    ->whereIn('trigger_event', ['appointment_reminder', 'inactive_client_reactivation'])
+                    ->get();
+
+                $this->assertCount(2, $automations);
+                $this->assertSame([], $automations->firstWhere('trigger_event', 'appointment_reminder')?->conditions_json);
+                $this->assertSame([], $automations->firstWhere('trigger_event', 'inactive_client_reactivation')?->action_payload_json);
+            });
         } finally {
             Carbon::setTestNow();
         }

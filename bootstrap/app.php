@@ -2,6 +2,8 @@
 
 use App\Application\Actions\Observability\RecordBoundaryRejectionAuditAction;
 use App\Http\Middleware\ResolveTenant;
+use App\Http\Middleware\EnsureCentralDomain;
+use App\Http\Middleware\AuthorizeLandlordAdmin;
 use App\Http\Middleware\AuthenticateTenantAccessToken;
 use App\Http\Middleware\AuthorizeTenantAbility;
 use App\Infrastructure\Integration\Whatsapp\BoundaryRejectionCodeResolver;
@@ -28,6 +30,8 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
+            'landlord.central' => EnsureCentralDomain::class,
+            'landlord.admin' => AuthorizeLandlordAdmin::class,
             'tenant.resolve' => ResolveTenant::class,
             'tenant.auth' => AuthenticateTenantAccessToken::class,
             'tenant.ability' => AuthorizeTenantAbility::class,

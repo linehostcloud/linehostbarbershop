@@ -103,7 +103,10 @@
                     <h2 class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Indicadores do WhatsApp</h2>
                     <p class="mt-1 text-sm text-slate-600">Leitura resumida de {{ $panel['metrics']['period']['label'] }} para lembretes, confirmações e reativações.</p>
                 </div>
-                <p class="text-xs leading-5 text-slate-500">{{ $panel['metrics']['period']['help'] }}</p>
+                <div class="text-xs leading-5 text-slate-500">
+                    <p>{{ $panel['metrics']['period']['help'] }}</p>
+                    <p>Janela aplicada: {{ $panel['metrics']['period']['from'] }} até {{ $panel['metrics']['period']['to'] }}.</p>
+                </div>
             </div>
 
             <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
