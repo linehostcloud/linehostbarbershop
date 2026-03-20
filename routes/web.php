@@ -34,6 +34,10 @@ Route::middleware('landlord.central')->prefix((string) config('landlord.panel.pa
         Route::get('/tenants/{tenant}', [LandlordTenantController::class, 'show'])->name('landlord.tenants.show');
         Route::patch('/tenants/{tenant}/dados-basicos', [LandlordTenantController::class, 'updateBasics'])
             ->name('landlord.tenants.update-basics');
+        Route::patch('/tenants/{tenant}/status', [LandlordTenantController::class, 'changeStatus'])
+            ->name('landlord.tenants.change-status');
+        Route::patch('/tenants/{tenant}/onboarding', [LandlordTenantController::class, 'transitionOnboardingStage'])
+            ->name('landlord.tenants.transition-onboarding-stage');
         Route::post('/tenants/{tenant}/dominios', [LandlordTenantController::class, 'storeDomain'])
             ->name('landlord.tenants.domains.store');
         Route::post('/tenants/{tenant}/dominios/{domain}/principal', [LandlordTenantController::class, 'setPrimaryDomain'])

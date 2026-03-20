@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Landlord;
 
+use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
@@ -48,6 +49,11 @@ class LandlordTenantDetailPanelTest extends TestCase
             ->assertOk()
             ->assertSee('Barbearia Detalhe')
             ->assertSee('barbearia-detalhe')
+            ->assertSee('Governança de estado')
+            ->assertSee('Status atual')
+            ->assertSee('Onboarding atual')
+            ->assertSee('Suspender tenant')
+            ->assertSee('Nenhuma transição de onboarding está disponível para o estágio atual.')
             ->assertSee('Saúde operacional')
             ->assertSee('Banco do tenant')
             ->assertSee('Schema mínimo')
@@ -175,6 +181,199 @@ class LandlordTenantDetailPanelTest extends TestCase
         $this->assertSame('America/Sao_Paulo', $tenant->timezone);
         $this->assertSame('BRL', $tenant->currency);
         $this->assertSame(0, AuditLog::query()->where('action', 'landlord_tenant.basics_updated')->count());
+    }
+
+    public function test_landlord_can_change_tenant_status_via_detail_panel_with_audit(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-status', 'barbearia-status.saas.test');
+        $otherTenant = $this->provisionTenant('barbearia-status-intocada', 'barbearia-status-intocada.saas.test');
+
+        $this->actingAs($admin)
+            ->followingRedirects()
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.change-status', $tenant), [
+                'status' => 'suspended',
+                'status_reason' => 'Suspensao administrativa para revisar a operacao.',
+            ])
+            ->assertOk()
+            ->assertSee('Status do tenant &quot;Barbearia Status&quot; atualizado para &quot;suspenso&quot;.', false)
+            ->assertSee('Status do tenant atualizado')
+            ->assertSee('Motivo: Suspensao administrativa para revisar a operacao.');
+
+        $tenant->refresh();
+        $otherTenant->refresh();
+
+        $this->assertSame('suspended', $tenant->status);
+        $this->assertNotNull($tenant->suspended_at);
+        $this->assertSame('active', $otherTenant->status);
+
+        $auditLog = AuditLog::query()
+            ->where('action', 'landlord_tenant.status_changed')
+            ->sole();
+
+        $this->assertSame($tenant->id, $auditLog->tenant_id);
+        $this->assertSame($admin->id, $auditLog->actor_user_id);
+        $this->assertSame('active', data_get($auditLog->before_json, 'status'));
+        $this->assertSame('suspended', data_get($auditLog->after_json, 'status'));
+        $this->assertSame('active', data_get($auditLog->metadata_json, 'from'));
+        $this->assertSame('suspended', data_get($auditLog->metadata_json, 'to'));
+        $this->assertSame('Suspensao administrativa para revisar a operacao.', data_get($auditLog->metadata_json, 'reason'));
+    }
+
+    public function test_landlord_status_transition_blocks_invalid_target_for_current_state(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-status-invalido', 'barbearia-status-invalido.saas.test');
+
+        $this->actingAs($admin)
+            ->from(route('landlord.tenants.show', $tenant))
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.change-status', $tenant), [
+                'status' => 'trial',
+                'status_reason' => 'Tentativa manual de retorno para trial.',
+            ])
+            ->assertRedirect(route('landlord.tenants.show', $tenant))
+            ->assertSessionHasErrorsIn('tenantStatusTransition', ['status']);
+
+        $tenant->refresh();
+
+        $this->assertSame('active', $tenant->status);
+        $this->assertSame(0, AuditLog::query()->where('action', 'landlord_tenant.status_changed')->count());
+    }
+
+    public function test_landlord_status_transition_requires_reason(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-status-motivo', 'barbearia-status-motivo.saas.test');
+
+        $this->actingAs($admin)
+            ->from(route('landlord.tenants.show', $tenant))
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.change-status', $tenant), [
+                'status' => 'suspended',
+                'status_reason' => '',
+            ])
+            ->assertRedirect(route('landlord.tenants.show', $tenant))
+            ->assertSessionHasErrorsIn('tenantStatusTransition', ['status_reason']);
+
+        $this->assertSame(0, AuditLog::query()->where('action', 'landlord_tenant.status_changed')->count());
+    }
+
+    public function test_landlord_can_advance_tenant_onboarding_with_audit(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->prepareTenantForProvisioningTransition('barbearia-onboarding');
+        $otherTenant = $this->prepareTenantForProvisioningTransition('barbearia-onboarding-intocado');
+
+        $this->ensureTenantDefaultAutomations($tenant, $admin);
+
+        $this->actingAs($admin)
+            ->followingRedirects()
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.transition-onboarding-stage', $tenant), [
+                'onboarding_stage' => 'provisioned',
+                'onboarding_transition_reason' => 'Provisionamento validado manualmente pelo landlord.',
+            ])
+            ->assertOk()
+            ->assertSee('Onboarding do tenant &quot;Barbearia Onboarding&quot; atualizado para &quot;provisionado&quot;.', false)
+            ->assertSee('Onboarding atualizado')
+            ->assertSee('Motivo: Provisionamento validado manualmente pelo landlord.');
+
+        $this->actingAs($admin)
+            ->followingRedirects()
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.transition-onboarding-stage', $tenant), [
+                'onboarding_stage' => 'completed',
+                'onboarding_transition_reason' => 'Checklist operacional concluido pelo landlord.',
+            ])
+            ->assertOk()
+            ->assertSee('Onboarding do tenant &quot;Barbearia Onboarding&quot; atualizado para &quot;concluído&quot;.', false)
+            ->assertSee('Onboarding atualizado')
+            ->assertSee('Motivo: Checklist operacional concluido pelo landlord.');
+
+        $tenant->refresh();
+        $otherTenant->refresh();
+
+        $this->assertSame('completed', $tenant->onboarding_stage);
+        $this->assertSame('created', $otherTenant->onboarding_stage);
+
+        $auditLogs = AuditLog::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('action', 'landlord_tenant.onboarding_stage_transitioned')
+            ->orderBy('created_at')
+            ->get();
+
+        $this->assertCount(2, $auditLogs);
+        $this->assertSame($admin->id, $auditLogs[0]->actor_user_id);
+        $this->assertSame('created', data_get($auditLogs[0]->before_json, 'onboarding_stage'));
+        $this->assertSame('provisioned', data_get($auditLogs[0]->after_json, 'onboarding_stage'));
+        $this->assertSame('Provisionamento validado manualmente pelo landlord.', data_get($auditLogs[0]->metadata_json, 'reason'));
+        $this->assertSame('provisioned', data_get($auditLogs[1]->before_json, 'onboarding_stage'));
+        $this->assertSame('completed', data_get($auditLogs[1]->after_json, 'onboarding_stage'));
+        $this->assertSame('Checklist operacional concluido pelo landlord.', data_get($auditLogs[1]->metadata_json, 'reason'));
+    }
+
+    public function test_landlord_onboarding_transition_blocks_progress_when_prerequisites_are_missing(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->createLandlordTenantWithoutSchema('barbearia-onboarding-bloqueado', 'barbearia-onboarding-bloqueado.saas.test');
+
+        $this->actingAs($admin)
+            ->from(route('landlord.tenants.show', $tenant))
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.transition-onboarding-stage', $tenant), [
+                'onboarding_stage' => 'provisioned',
+                'onboarding_transition_reason' => 'Tentativa de avancar onboarding sem schema minimo.',
+            ])
+            ->assertRedirect(route('landlord.tenants.show', $tenant))
+            ->assertSessionHasErrorsIn('tenantOnboardingTransition', ['onboarding_stage']);
+
+        $tenant->refresh();
+
+        $this->assertSame('created', $tenant->onboarding_stage);
+        $this->assertSame(0, AuditLog::query()->where('action', 'landlord_tenant.onboarding_stage_transitioned')->count());
+    }
+
+    public function test_landlord_onboarding_transition_requires_reason(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->prepareTenantForProvisioningTransition('barbearia-onboarding-motivo');
+
+        $this->actingAs($admin)
+            ->from(route('landlord.tenants.show', $tenant))
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.transition-onboarding-stage', $tenant), [
+                'onboarding_stage' => 'provisioned',
+                'onboarding_transition_reason' => '',
+            ])
+            ->assertRedirect(route('landlord.tenants.show', $tenant))
+            ->assertSessionHasErrorsIn('tenantOnboardingTransition', ['onboarding_transition_reason']);
+
+        $this->assertSame(0, AuditLog::query()->where('action', 'landlord_tenant.onboarding_stage_transitioned')->count());
+    }
+
+    public function test_landlord_detail_only_shows_governance_actions_allowed_for_the_current_state(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->prepareTenantForProvisioningTransition('barbearia-governanca-ui');
+
+        $this->ensureTenantDefaultAutomations($tenant, $admin);
+
+        $tenant->forceFill([
+            'status' => 'suspended',
+            'onboarding_stage' => 'provisioned',
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.show', $tenant))
+            ->assertOk()
+            ->assertSee('Governança de estado')
+            ->assertSee('Reativar tenant')
+            ->assertDontSee('Ativar tenant')
+            ->assertDontSee('Suspender tenant')
+            ->assertSee('Concluir onboarding')
+            ->assertDontSee('Marcar como provisionado');
     }
 
     public function test_landlord_can_add_domain_via_detail_panel(): void
@@ -383,6 +582,22 @@ class LandlordTenantDetailPanelTest extends TestCase
 
         $this->actingAs($user)
             ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.change-status', $tenant), [
+                'status' => 'suspended',
+                'status_reason' => 'Tentativa sem permissao para mudar status.',
+            ])
+            ->assertForbidden();
+
+        $this->actingAs($user)
+            ->withoutMiddleware(ValidateCsrfToken::class)
+            ->patch(route('landlord.tenants.transition-onboarding-stage', $tenant), [
+                'onboarding_stage' => 'provisioned',
+                'onboarding_transition_reason' => 'Tentativa sem permissao para mudar onboarding.',
+            ])
+            ->assertForbidden();
+
+        $this->actingAs($user)
+            ->withoutMiddleware(ValidateCsrfToken::class)
             ->post(route('landlord.tenants.domains.store', $tenant), [
                 'domain' => 'agenda.barbearia-bloqueio.saas.test',
             ])
@@ -405,6 +620,23 @@ class LandlordTenantDetailPanelTest extends TestCase
             'email_verified_at' => now(),
             'password' => 'password123',
         ]);
+    }
+
+    private function prepareTenantForProvisioningTransition(string $slug): Tenant
+    {
+        $tenant = $this->provisionTenant($slug, sprintf('%s.saas.test', $slug));
+        $this->createTenantUser($tenant, email: sprintf('%s-owner@test.local', $slug));
+
+        $tenant->forceFill([
+            'onboarding_stage' => 'created',
+        ])->save();
+
+        return $tenant->fresh(['domains', 'memberships.user']);
+    }
+
+    private function ensureTenantDefaultAutomations(Tenant $tenant, User $actor): void
+    {
+        app(EnsureLandlordTenantDefaultAutomationsAction::class)->execute($tenant, $actor);
     }
 
     /**

@@ -6,16 +6,20 @@ use App\Application\Actions\Tenancy\AddLandlordTenantDomainAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
+use App\Application\Actions\Tenancy\ChangeLandlordTenantStatusAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Application\Actions\Tenancy\ProvisionTenantFromLandlordPanelAction;
 use App\Application\Actions\Tenancy\RunLandlordTenantSchemaSyncAction;
 use App\Application\Actions\Tenancy\SetLandlordTenantPrimaryDomainAction;
+use App\Application\Actions\Tenancy\TransitionLandlordTenantOnboardingStageAction;
 use App\Application\Actions\Tenancy\UpdateLandlordTenantBasicsAction;
 use App\Domain\Tenant\Models\Tenant;
 use App\Domain\Tenant\Models\TenantDomain;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Web\ChangeLandlordTenantStatusRequest;
 use App\Http\Requests\Web\StoreLandlordTenantDomainRequest;
 use App\Http\Requests\Web\StoreLandlordTenantRequest;
+use App\Http\Requests\Web\TransitionLandlordTenantOnboardingStageRequest;
 use App\Http\Requests\Web\UpdateLandlordTenantBasicsRequest;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
@@ -131,6 +135,76 @@ class LandlordTenantController extends Controller
                 'message' => $result['changed']
                     ? sprintf('Dados básicos do tenant "%s" atualizados com sucesso.', $tenant->fresh()->trade_name)
                     : sprintf('Nenhuma alteração foi aplicada aos dados básicos do tenant "%s".', $tenant->trade_name),
+            ]);
+    }
+
+    public function changeStatus(
+        ChangeLandlordTenantStatusRequest $request,
+        Tenant $tenant,
+        ChangeLandlordTenantStatusAction $changeTenantStatus,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+
+        try {
+            $result = $changeTenantStatus->execute(
+                tenant: $tenant,
+                actor: $actor,
+                input: $request->validated(),
+            );
+        } catch (Throwable $throwable) {
+            return back()
+                ->withInput()
+                ->withErrors([
+                    'status' => $throwable->getMessage(),
+                ], 'tenantStatusTransition');
+        }
+
+        return redirect()
+            ->route('landlord.tenants.show', $tenant)
+            ->with('status', [
+                'type' => 'success',
+                'message' => sprintf(
+                    'Status do tenant "%s" atualizado para "%s".',
+                    $tenant->fresh()->trade_name,
+                    mb_strtolower($result['label']),
+                ),
+            ]);
+    }
+
+    public function transitionOnboardingStage(
+        TransitionLandlordTenantOnboardingStageRequest $request,
+        Tenant $tenant,
+        TransitionLandlordTenantOnboardingStageAction $transitionOnboardingStage,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+
+        try {
+            $result = $transitionOnboardingStage->execute(
+                tenant: $tenant,
+                actor: $actor,
+                input: $request->validated(),
+            );
+        } catch (Throwable $throwable) {
+            return back()
+                ->withInput()
+                ->withErrors([
+                    'onboarding_stage' => $throwable->getMessage(),
+                ], 'tenantOnboardingTransition');
+        }
+
+        return redirect()
+            ->route('landlord.tenants.show', $tenant)
+            ->with('status', [
+                'type' => 'success',
+                'message' => sprintf(
+                    'Onboarding do tenant "%s" atualizado para "%s".',
+                    $tenant->fresh()->trade_name,
+                    mb_strtolower($result['label']),
+                ),
             ]);
     }
 

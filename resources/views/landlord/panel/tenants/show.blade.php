@@ -5,6 +5,10 @@
 @section('content')
     @php($tenantBasicsErrors = $errors->getBag('tenantBasics'))
     @php($tenantDomainErrors = $errors->getBag('tenantDomains'))
+    @php($tenantStatusTransitionErrors = $errors->getBag('tenantStatusTransition'))
+    @php($tenantOnboardingTransitionErrors = $errors->getBag('tenantOnboardingTransition'))
+    @php($statusGovernance = $tenant['state_governance']['status'])
+    @php($onboardingGovernance = $tenant['state_governance']['onboarding_stage'])
 
     <div class="mx-auto max-w-7xl space-y-6">
         <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 lg:flex-row lg:items-start lg:justify-between">
@@ -241,7 +245,7 @@
 
                         <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-xs leading-6 text-slate-300">
                             <p class="font-semibold text-white">Bloqueado nesta fase</p>
-                            <p>Slug, plano, status, onboarding, owner e campos de provisionamento seguem somente leitura no painel.</p>
+                            <p>Slug, plano, owner e campos de provisionamento seguem somente leitura no painel. Status e onboarding usam transições administrativas controladas na governança de estado.</p>
                         </div>
 
                         <div class="flex items-center justify-end">
@@ -257,6 +261,159 @@
             </section>
 
             <aside class="space-y-6">
+                <div class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl shadow-slate-950/20">
+                    <h2 class="text-lg font-semibold text-white">Governança de estado</h2>
+                    <p class="mt-1 text-sm text-slate-400">
+                        Transições administrativas fechadas para status e onboarding, sempre com motivo obrigatório e auditoria.
+                    </p>
+
+                    <div class="mt-5 space-y-4">
+                        <section class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Status atual</p>
+                            <p class="mt-1 text-sm font-semibold text-slate-100">{{ $statusGovernance['current']['label'] }}</p>
+
+                            @if ($tenantStatusTransitionErrors->any())
+                                <div class="mt-4 rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                                    <p class="font-semibold">Não foi possível atualizar o status.</p>
+                                    <p class="mt-1">{{ $tenantStatusTransitionErrors->first() }}</p>
+                                </div>
+                            @endif
+
+                            @if ($statusGovernance['available'] !== [])
+                                <form method="POST" action="{{ route('landlord.tenants.change-status', $tenant['id']) }}" class="mt-4 space-y-4">
+                                    @csrf
+                                    @method('PATCH')
+
+                                    <div class="space-y-3">
+                                        @foreach ($statusGovernance['available'] as $transition)
+                                            <label class="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-4 text-sm text-slate-200">
+                                                <input
+                                                    type="radio"
+                                                    name="status"
+                                                    value="{{ $transition['target'] }}"
+                                                    @checked(old('status') === $transition['target'])
+                                                    class="mt-1 h-4 w-4 border-slate-600 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
+                                                >
+                                                <span class="block">
+                                                    <span class="block font-semibold text-slate-100">{{ $transition['label'] }}</span>
+                                                    <span class="mt-1 block text-xs leading-5 text-slate-400">{{ $transition['description'] }}</span>
+                                                </span>
+                                            </label>
+                                        @endforeach
+                                    </div>
+
+                                    @if ($tenantStatusTransitionErrors->has('status'))
+                                        <p class="text-xs text-rose-300">{{ $tenantStatusTransitionErrors->first('status') }}</p>
+                                    @endif
+
+                                    <label class="block space-y-2">
+                                        <span class="text-sm font-medium text-slate-200">Motivo administrativo</span>
+                                        <textarea
+                                            name="status_reason"
+                                            rows="3"
+                                            required
+                                            placeholder="Descreva por que esta mudança de status está sendo aplicada."
+                                            class="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-400"
+                                        >{{ old('status_reason') }}</textarea>
+                                        @if ($tenantStatusTransitionErrors->has('status_reason'))
+                                            <p class="text-xs text-rose-300">{{ $tenantStatusTransitionErrors->first('status_reason') }}</p>
+                                        @endif
+                                    </label>
+
+                                    <p class="text-xs leading-5 text-slate-400">
+                                        O motivo fica registrado na trilha administrativa do tenant junto com o estado anterior e o novo estado.
+                                    </p>
+
+                                    <div class="flex items-center justify-end">
+                                        <button
+                                            type="submit"
+                                            class="inline-flex items-center justify-center rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
+                                        >
+                                            Aplicar transição de status
+                                        </button>
+                                    </div>
+                                </form>
+                            @else
+                                <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-400">
+                                    {{ $statusGovernance['unavailable_reason'] }}
+                                </div>
+                            @endif
+                        </section>
+
+                        <section class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Onboarding atual</p>
+                            <p class="mt-1 text-sm font-semibold text-slate-100">{{ $onboardingGovernance['current']['label'] }}</p>
+
+                            @if ($tenantOnboardingTransitionErrors->any())
+                                <div class="mt-4 rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                                    <p class="font-semibold">Não foi possível atualizar o onboarding.</p>
+                                    <p class="mt-1">{{ $tenantOnboardingTransitionErrors->first() }}</p>
+                                </div>
+                            @endif
+
+                            @if ($onboardingGovernance['available'] !== [])
+                                <form method="POST" action="{{ route('landlord.tenants.transition-onboarding-stage', $tenant['id']) }}" class="mt-4 space-y-4">
+                                    @csrf
+                                    @method('PATCH')
+
+                                    <div class="space-y-3">
+                                        @foreach ($onboardingGovernance['available'] as $transition)
+                                            <label class="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-4 text-sm text-slate-200">
+                                                <input
+                                                    type="radio"
+                                                    name="onboarding_stage"
+                                                    value="{{ $transition['target'] }}"
+                                                    @checked(old('onboarding_stage') === $transition['target'])
+                                                    class="mt-1 h-4 w-4 border-slate-600 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
+                                                >
+                                                <span class="block">
+                                                    <span class="block font-semibold text-slate-100">{{ $transition['label'] }}</span>
+                                                    <span class="mt-1 block text-xs leading-5 text-slate-400">{{ $transition['description'] }}</span>
+                                                </span>
+                                            </label>
+                                        @endforeach
+                                    </div>
+
+                                    @if ($tenantOnboardingTransitionErrors->has('onboarding_stage'))
+                                        <p class="text-xs text-rose-300">{{ $tenantOnboardingTransitionErrors->first('onboarding_stage') }}</p>
+                                    @endif
+
+                                    <label class="block space-y-2">
+                                        <span class="text-sm font-medium text-slate-200">Motivo administrativo</span>
+                                        <textarea
+                                            name="onboarding_transition_reason"
+                                            rows="3"
+                                            required
+                                            placeholder="Descreva por que o onboarding está avançando para o próximo estágio."
+                                            class="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-400"
+                                        >{{ old('onboarding_transition_reason') }}</textarea>
+                                        @if ($tenantOnboardingTransitionErrors->has('onboarding_transition_reason'))
+                                            <p class="text-xs text-rose-300">{{ $tenantOnboardingTransitionErrors->first('onboarding_transition_reason') }}</p>
+                                        @endif
+                                    </label>
+
+                                    <p class="text-xs leading-5 text-slate-400">
+                                        O avanço de onboarding só aparece quando as pré-condições reais do tenant já estiverem atendidas.
+                                    </p>
+
+                                    <div class="flex items-center justify-end">
+                                        <button
+                                            type="submit"
+                                            class="inline-flex items-center justify-center rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
+                                        >
+                                            Aplicar transição de onboarding
+                                        </button>
+                                    </div>
+                                </form>
+                            @else
+                                <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-400">
+                                    {{ $onboardingGovernance['unavailable_reason'] }}
+                                </div>
+                            @endif
+                        </section>
+                    </div>
+                </div>
+
                 <div class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl shadow-slate-950/20">
                     <h2 class="text-lg font-semibold text-white">Ações administrativas seguras</h2>
                     <p class="mt-1 text-sm text-slate-400">

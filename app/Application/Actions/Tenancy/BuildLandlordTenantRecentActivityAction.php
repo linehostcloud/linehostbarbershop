@@ -55,6 +55,8 @@ class BuildLandlordTenantRecentActivityAction
             'landlord_tenant.basics_updated' => 'Dados básicos atualizados',
             'landlord_tenant.domain_added' => 'Domínio adicionado',
             'landlord_tenant.primary_domain_updated' => 'Domínio principal atualizado',
+            'landlord_tenant.status_changed' => 'Status do tenant atualizado',
+            'landlord_tenant.onboarding_stage_transitioned' => 'Onboarding atualizado',
             default => 'Evento administrativo',
         };
     }
@@ -73,6 +75,8 @@ class BuildLandlordTenantRecentActivityAction
             'landlord_tenant.basics_updated' => $this->basicsDetail($after, $metadata),
             'landlord_tenant.domain_added' => $this->domainAddedDetail($after),
             'landlord_tenant.primary_domain_updated' => $this->primaryDomainDetail($after),
+            'landlord_tenant.status_changed' => $this->statusChangedDetail($after, $metadata),
+            'landlord_tenant.onboarding_stage_transitioned' => $this->onboardingStageDetail($after, $metadata),
             default => 'Evento administrativo registrado para este tenant.',
         };
     }
@@ -176,6 +180,58 @@ class BuildLandlordTenantRecentActivityAction
             : 'Domínio principal atualizado para o tenant.';
     }
 
+    /**
+     * @param  array<string, mixed>  $after
+     * @param  array<string, mixed>  $metadata
+     */
+    private function statusChangedDetail(array $after, array $metadata): string
+    {
+        $to = (string) ($after['status'] ?? ($metadata['to'] ?? ''));
+        $from = (string) ($metadata['from'] ?? '');
+        $reason = rtrim(trim((string) ($metadata['reason'] ?? '')), '.');
+        $parts = [];
+
+        if ($from !== '' && $to !== '') {
+            $parts[] = sprintf('Status alterado de %s para %s.', $this->labelValue($from), $this->labelValue($to));
+        } elseif ($to !== '') {
+            $parts[] = sprintf('Status alterado para %s.', $this->labelValue($to));
+        }
+
+        if ($reason !== '') {
+            $parts[] = sprintf('Motivo: %s.', $reason);
+        }
+
+        return $parts !== []
+            ? implode(' ', $parts)
+            : 'Status do tenant atualizado.';
+    }
+
+    /**
+     * @param  array<string, mixed>  $after
+     * @param  array<string, mixed>  $metadata
+     */
+    private function onboardingStageDetail(array $after, array $metadata): string
+    {
+        $to = (string) ($after['onboarding_stage'] ?? ($metadata['to'] ?? ''));
+        $from = (string) ($metadata['from'] ?? '');
+        $reason = rtrim(trim((string) ($metadata['reason'] ?? '')), '.');
+        $parts = [];
+
+        if ($from !== '' && $to !== '') {
+            $parts[] = sprintf('Onboarding alterado de %s para %s.', $this->labelValue($from), $this->labelValue($to));
+        } elseif ($to !== '') {
+            $parts[] = sprintf('Onboarding alterado para %s.', $this->labelValue($to));
+        }
+
+        if ($reason !== '') {
+            $parts[] = sprintf('Motivo: %s.', $reason);
+        }
+
+        return $parts !== []
+            ? implode(' ', $parts)
+            : 'Onboarding do tenant atualizado.';
+    }
+
     private function fieldLabel(string $field): string
     {
         return match ($field) {
@@ -184,6 +240,19 @@ class BuildLandlordTenantRecentActivityAction
             'timezone' => 'Timezone',
             'currency' => 'Moeda',
             default => ucfirst(str_replace('_', ' ', $field)),
+        };
+    }
+
+    private function labelValue(string $value): string
+    {
+        return match ($value) {
+            'active' => 'Ativo',
+            'trial' => 'Trial',
+            'suspended' => 'Suspenso',
+            'created' => 'Criado',
+            'provisioned' => 'Provisionado',
+            'completed' => 'Concluído',
+            default => ucfirst(str_replace('_', ' ', $value)),
         };
     }
 }

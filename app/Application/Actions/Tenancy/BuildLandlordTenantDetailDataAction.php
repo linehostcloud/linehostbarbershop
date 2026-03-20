@@ -11,6 +11,7 @@ class BuildLandlordTenantDetailDataAction
         private readonly MapLandlordTenantSummaryAction $mapTenantSummary,
         private readonly BuildLandlordTenantOperationalHealthAction $buildOperationalHealth,
         private readonly BuildLandlordTenantRecentActivityAction $buildRecentActivity,
+        private readonly BuildLandlordTenantStateGovernanceAction $buildStateGovernance,
     ) {}
 
     /**
@@ -28,6 +29,7 @@ class BuildLandlordTenantDetailDataAction
             ->filter(fn (TenantMembership $membership) => $membership->role === 'owner' && $membership->isActive())
             ->sortByDesc(fn (TenantMembership $membership) => $membership->is_primary)
             ->first();
+        $operational = $this->buildOperationalHealth->execute($tenant, $summary);
 
         return array_merge($summary, [
             'database_name' => $tenant->database_name,
@@ -49,8 +51,9 @@ class BuildLandlordTenantDetailDataAction
                 'role' => $ownerMembership?->role,
                 'accepted_at' => $ownerMembership?->accepted_at?->setTimezone(config('app.timezone', 'UTC'))->format('d/m/Y H:i'),
             ],
-            'operational' => $this->buildOperationalHealth->execute($tenant, $summary),
+            'operational' => $operational,
             'recent_activity' => $this->buildRecentActivity->execute($tenant),
+            'state_governance' => $this->buildStateGovernance->execute($tenant, $summary, $operational),
         ]);
     }
 }
