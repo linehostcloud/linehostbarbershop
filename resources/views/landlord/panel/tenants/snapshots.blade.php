@@ -463,7 +463,14 @@
             <section class="rounded-3xl border border-slate-800 bg-slate-900/80 p-4 shadow-xl shadow-slate-950/20">
                 <div class="mb-4 px-1">
                     <h2 class="text-lg font-semibold text-white">Histórico de execuções em lote</h2>
-                    <p class="mt-1 text-sm text-slate-400">Últimas {{ $batchHistory->count() }} execuções de refresh em lote com rastreamento de resultado por job.</p>
+                    <p class="mt-1 text-sm text-slate-400">
+                        Últimas {{ $batchHistory->count() }} execuções de refresh em lote com rastreamento de resultado por job.
+                        @php
+                            $retryMax = (int) config('landlord.tenants.detail_snapshot.retry_max_attempts', 4);
+                            $retryBackoff = config('landlord.tenants.detail_snapshot.retry_backoff_seconds', [60, 300, 900]);
+                        @endphp
+                        <span class="text-slate-500">Retry: {{ $retryMax - 1 }}x com backoff {{ implode('s/', $retryBackoff) }}s.</span>
+                    </p>
                 </div>
 
                 <div class="overflow-x-auto">
