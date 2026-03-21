@@ -35,4 +35,8 @@ return [
         'performance_logging_enabled' => filter_var(env('LANDLORD_TENANTS_INDEX_PERFORMANCE_LOGGING_ENABLED', true), FILTER_VALIDATE_BOOL),
         'failure_detail_limit' => (int) env('LANDLORD_TENANTS_INDEX_PERFORMANCE_FAILURE_DETAIL_LIMIT', 5),
     ],
+    'landlord_tenants_detail' => [
+        'performance_logging_enabled' => filter_var(env('LANDLORD_TENANTS_DETAIL_PERFORMANCE_LOGGING_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'failure_detail_limit' => (int) env('LANDLORD_TENANTS_DETAIL_PERFORMANCE_FAILURE_DETAIL_LIMIT', 5),
+    ],
 ];

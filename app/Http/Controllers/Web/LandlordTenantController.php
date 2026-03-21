@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Web;
 
 use App\Application\Actions\Observability\RecordLandlordTenantIndexPerformanceAction;
+use App\Application\Actions\Observability\RecordLandlordTenantDetailPerformanceAction;
 use App\Application\Actions\Tenancy\AddLandlordTenantDomainAction;
 use App\Application\Actions\Tenancy\BuildLandlordDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
@@ -26,6 +27,7 @@ use App\Http\Requests\Web\StoreLandlordTenantRequest;
 use App\Http\Requests\Web\TransitionLandlordTenantOnboardingStageRequest;
 use App\Http\Requests\Web\UpdateLandlordTenantBasicsRequest;
 use App\Support\Observability\LandlordTenantIndexPerformanceTracker;
+use App\Support\Observability\LandlordTenantDetailPerformanceTracker;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -134,11 +136,33 @@ class LandlordTenantController extends Controller
     }
 
     public function show(
+        Request $request,
         Tenant $tenant,
         BuildLandlordTenantDetailDataAction $buildDetailData,
+        RecordLandlordTenantDetailPerformanceAction $recordPerformance,
+        LandlordTenantDetailPerformanceTracker $performanceTracker,
     ): View {
+        $performanceTracker->setMeta('route_name', (string) $request->route()?->getName());
+        $performanceTracker->setMeta('path', $request->path());
+        $performanceTracker->setMeta('tenant_id', (string) $tenant->getKey());
+        $performanceTracker->setMeta('tenant_slug', (string) $tenant->slug);
+
+        try {
+            $payload = $performanceTracker->measure('total_duration_ms', fn (): array => $buildDetailData->execute($tenant));
+        } catch (Throwable $throwable) {
+            $performanceTracker->recordFailure('landlord.tenants.show.read', $throwable, [
+                'tenant_id' => (string) $tenant->getKey(),
+                'tenant_slug' => (string) $tenant->slug,
+            ]);
+            $recordPerformance->execute($request, $tenant, $performanceTracker, $throwable);
+
+            throw $throwable;
+        }
+
+        $recordPerformance->execute($request, $tenant, $performanceTracker);
+
         return view('landlord.panel.tenants.show', [
-            'tenant' => $buildDetailData->execute($tenant),
+            'tenant' => $payload,
             'navigation' => [
                 'active' => 'tenants',
             ],

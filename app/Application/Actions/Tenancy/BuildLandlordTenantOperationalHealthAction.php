@@ -5,6 +5,7 @@ namespace App\Application\Actions\Tenancy;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
 use App\Domain\Tenant\Models\Tenant;
+use App\Support\Observability\LandlordTenantDetailPerformanceTracker;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -13,6 +14,7 @@ class BuildLandlordTenantOperationalHealthAction
 {
     public function __construct(
         private readonly TenantDatabaseManager $tenantDatabaseManager,
+        private readonly LandlordTenantDetailPerformanceTracker $performanceTracker,
     ) {}
 
     /**
@@ -195,7 +197,13 @@ class BuildLandlordTenantOperationalHealthAction
                     ? 'As automações padrão de WhatsApp estão disponíveis.'
                     : 'As automações padrão de WhatsApp ainda não foram garantidas no tenant.',
             ];
-        } catch (Throwable) {
+        } catch (Throwable $throwable) {
+            $this->performanceTracker->increment('operational_health_validation_failed_count');
+            $this->performanceTracker->recordFailure('operational_health.runtime_inspection', $throwable, [
+                'tenant_id' => (string) $tenant->getKey(),
+                'tenant_slug' => (string) $tenant->slug,
+            ]);
+
             return [
                 'database_exists' => true,
                 'schema_ok' => false,

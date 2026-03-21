@@ -5,6 +5,7 @@ namespace App\Application\Actions\Tenancy;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Infrastructure\Tenancy\TenantDatabaseProvisioner;
+use App\Support\Observability\LandlordTenantDetailPerformanceTracker;
 use App\Support\Observability\LandlordTenantIndexPerformanceTracker;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -15,6 +16,7 @@ class DetermineLandlordTenantProvisioningStatusAction
         private readonly TenantDatabaseProvisioner $databaseProvisioner,
         private readonly TenantDatabaseManager $tenantDatabaseManager,
         private readonly LandlordTenantIndexPerformanceTracker $performanceTracker,
+        private readonly LandlordTenantDetailPerformanceTracker $detailPerformanceTracker,
     ) {
     }
 
@@ -32,6 +34,7 @@ class DetermineLandlordTenantProvisioningStatusAction
     public function execute(Tenant $tenant): array
     {
         $this->performanceTracker->increment('provisioning_validation_count');
+        $this->detailPerformanceTracker->increment('provisioning_validation_count');
 
         return $this->performanceTracker->measure('provisioning_duration_ms', function () use ($tenant): array {
             $databaseExists = $this->databaseProvisioner->databaseExists($tenant->database_name);
@@ -59,10 +62,13 @@ class DetermineLandlordTenantProvisioningStatusAction
                     ->every(fn (string $table): bool => Schema::connection('tenant')->hasTable($table));
             } catch (Throwable $throwable) {
                 $this->performanceTracker->increment('provisioning_connection_failed_count');
-                $this->performanceTracker->recordFailure('provisioning.schema_validation', $throwable, [
+                $this->detailPerformanceTracker->increment('provisioning_connection_failed_count');
+                $failureContext = [
                     'tenant_id' => (string) $tenant->getKey(),
                     'tenant_slug' => (string) $tenant->slug,
-                ]);
+                ];
+                $this->performanceTracker->recordFailure('provisioning.schema_validation', $throwable, $failureContext);
+                $this->detailPerformanceTracker->recordFailure('provisioning.schema_validation', $throwable, $failureContext);
 
                 return [
                     'code' => 'connection_failed',

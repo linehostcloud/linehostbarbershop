@@ -6,6 +6,7 @@ use App\Application\Listeners\Observability\RecordAppointmentCreatedDomainEvent;
 use App\Application\Listeners\Observability\RecordOrderClosedDomainEvent;
 use App\Domain\Appointment\Events\AppointmentCreated;
 use App\Domain\Order\Events\OrderClosed;
+use App\Support\Observability\LandlordTenantDetailPerformanceTracker;
 use App\Support\Observability\LandlordTenantIndexPerformanceTracker;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -18,6 +19,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(LandlordTenantIndexPerformanceTracker::class);
+        $this->app->scoped(LandlordTenantDetailPerformanceTracker::class);
     }
 
     /**

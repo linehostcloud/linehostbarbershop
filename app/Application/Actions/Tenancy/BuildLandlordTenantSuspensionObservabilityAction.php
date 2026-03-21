@@ -8,13 +8,18 @@ use App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode;
 use App\Domain\Observability\Models\BoundaryRejectionAudit;
 use App\Domain\Observability\Models\TenantOperationalBlockAudit;
 use App\Domain\Tenant\Models\Tenant;
+use App\Support\Observability\LandlordTenantDetailPerformanceTracker;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 
 class BuildLandlordTenantSuspensionObservabilityAction
 {
+    public function __construct(
+        private readonly LandlordTenantDetailPerformanceTracker $performanceTracker,
+    ) {}
+
     private const WINDOW_DAYS = 7;
 
     private const RECENT_LIMIT = 6;
@@ -70,11 +75,16 @@ class BuildLandlordTenantSuspensionObservabilityAction
         $missingTables = $this->missingObservabilityTables();
 
         if ($missingTables !== []) {
-            Log::warning('Landlord tenant suspension observability unavailable because required landlord tables are missing.', [
-                'tenant_id' => $tenant->getKey(),
-                'tenant_slug' => $tenant->slug,
-                'missing_tables' => $missingTables,
-            ]);
+            $this->performanceTracker->increment('suspension_observability_missing_table_count', count($missingTables));
+            $this->performanceTracker->recordFailure(
+                'suspension_observability.missing_tables',
+                new RuntimeException(sprintf('Missing required landlord observability tables: %s', implode(', ', $missingTables))),
+                [
+                    'tenant_id' => (string) $tenant->getKey(),
+                    'tenant_slug' => (string) $tenant->slug,
+                    'missing_tables' => $missingTables,
+                ],
+            );
 
             return $this->unavailablePayload($accessTokens, $missingTables);
         }

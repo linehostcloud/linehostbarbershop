@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Landlord;
 
+use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Auth\Models\UserAccessToken;
@@ -16,6 +17,7 @@ use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
@@ -288,6 +290,8 @@ class LandlordTenantDetailPanelTest extends TestCase
 
     public function test_landlord_tenant_detail_degrades_safely_when_operational_block_audit_table_is_missing(): void
     {
+        config()->set('observability.landlord_tenants_detail.performance_logging_enabled', true);
+
         Log::spy();
 
         $admin = $this->createLandlordAdmin();
@@ -304,13 +308,84 @@ class LandlordTenantDetailPanelTest extends TestCase
             ->assertSee('A leitura dos bloqueios recentes está temporariamente indisponível até a migration landlord ser aplicada.');
 
         Log::shouldHaveReceived('warning')
-            ->once()
             ->withArgs(function (string $message, array $context) use ($tenant): bool {
-                return $message === 'Landlord tenant suspension observability unavailable because required landlord tables are missing.'
+                return $message === 'Landlord tenant detail read measured with technical failures.'
+                    && data_get($context, 'event') === 'landlord.tenants.show.read'
                     && data_get($context, 'tenant_id') === $tenant->id
                     && data_get($context, 'tenant_slug') === $tenant->slug
-                    && data_get($context, 'missing_tables') === ['tenant_operational_block_audits'];
+                    && data_get($context, 'counts.technical_failure_count') === 1
+                    && data_get($context, 'failures.0.area') === 'suspension_observability.missing_tables'
+                    && data_get($context, 'failures.0.missing_tables') === ['tenant_operational_block_audits'];
             });
+    }
+
+    public function test_landlord_tenant_detail_records_structured_performance_log(): void
+    {
+        config()->set('observability.landlord_tenants_detail.performance_logging_enabled', true);
+
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-detalhe-performance', 'barbearia-detalhe-performance.saas.test');
+        $this->createTenantUser($tenant, email: 'owner-detalhe-performance@test.local');
+
+        Log::spy();
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.show', $tenant))
+            ->assertOk();
+
+        Log::shouldHaveReceived('info')
+            ->withArgs(function (string $message, array $context) use ($tenant): bool {
+                return $message === 'Landlord tenant detail read measured.'
+                    && data_get($context, 'event') === 'landlord.tenants.show.read'
+                    && data_get($context, 'tenant_id') === $tenant->id
+                    && data_get($context, 'tenant_slug') === $tenant->slug
+                    && data_get($context, 'counts.domain_count') === 1
+                    && data_get($context, 'counts.membership_count') === 1
+                    && data_get($context, 'counts.recent_activity_count') === 0
+                    && data_get($context, 'counts.provisioning_validation_count') === 1
+                    && is_int(data_get($context, 'durations_ms.total_duration_ms'))
+                    && is_int(data_get($context, 'durations_ms.summary_mapping_duration_ms'))
+                    && is_int(data_get($context, 'durations_ms.operational_health_duration_ms'))
+                    && is_int(data_get($context, 'durations_ms.suspension_observability_duration_ms'));
+            })
+            ->once();
+    }
+
+    public function test_landlord_tenant_detail_records_warning_when_landlord_read_fails(): void
+    {
+        config()->set('observability.landlord_tenants_detail.performance_logging_enabled', true);
+
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-detalhe-falha', 'barbearia-detalhe-falha.saas.test');
+        Log::spy();
+
+        $this->app->bind(BuildLandlordTenantDetailDataAction::class, fn (): BuildLandlordTenantDetailDataAction => new class extends BuildLandlordTenantDetailDataAction
+        {
+            public function __construct()
+            {
+            }
+
+            public function execute(Tenant $tenant): array
+            {
+                throw new RuntimeException('Falha sintética de leitura do detalhe landlord.');
+            }
+        });
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.show', $tenant))
+            ->assertStatus(500);
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(function (string $message, array $context) use ($tenant): bool {
+                return $message === 'Landlord tenant detail read failed.'
+                    && data_get($context, 'event') === 'landlord.tenants.show.read_failed'
+                    && data_get($context, 'tenant_id') === $tenant->id
+                    && data_get($context, 'tenant_slug') === $tenant->slug
+                    && data_get($context, 'exception_class') === RuntimeException::class
+                    && data_get($context, 'counts.technical_failure_count') === 1;
+            })
+            ->atLeast()
+            ->once();
     }
 
     public function test_landlord_can_update_tenant_basics_via_detail_panel(): void
