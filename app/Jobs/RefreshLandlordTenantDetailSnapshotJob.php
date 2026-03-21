@@ -6,6 +6,7 @@ use App\Application\Actions\Tenancy\ClassifyLandlordTenantSnapshotFailureAction;
 use App\Application\Actions\Tenancy\RefreshLandlordTenantDetailSnapshotAction;
 use App\Application\Actions\Tenancy\ReportLandlordSnapshotBatchJobResultAction;
 use App\Application\Actions\Tenancy\ResolveLandlordTenantSnapshotRetryDelayAction;
+use App\Domain\Tenant\Models\LandlordTenantDetailSnapshot;
 use App\Domain\Tenant\Models\Tenant;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -52,6 +53,7 @@ class RefreshLandlordTenantDetailSnapshotJob implements ShouldQueue
                 $this->reportSkipped($reportBatch);
             } else {
                 $this->reportSucceeded($reportBatch);
+                $this->clearRetryState();
             }
         } catch (Throwable $throwable) {
             $this->handleFailure($throwable, $reportBatch, $classifyFailure, $resolveRetry);
@@ -73,6 +75,7 @@ class RefreshLandlordTenantDetailSnapshotJob implements ShouldQueue
             return;
         }
 
+        $this->persistRetryExhausted();
         $this->reportFailed($reportBatch);
         $this->logRetryExhausted($classification, $retryDecision, $throwable);
 
@@ -82,15 +85,55 @@ class RefreshLandlordTenantDetailSnapshotJob implements ShouldQueue
     private function scheduleRetry(array $retryDecision, array $classification): void
     {
         $nextAttempt = $this->attempt + 1;
+        $nextRetryAt = now()->addSeconds($retryDecision['delay_seconds']);
 
         self::dispatch(
             tenantId: $this->tenantId,
             source: $this->source,
             batchId: $this->batchId,
             attempt: $nextAttempt,
-        )->delay(now()->addSeconds($retryDecision['delay_seconds']));
+        )->delay($nextRetryAt);
 
+        $this->persistRetryScheduled($this->attempt, $nextRetryAt);
         $this->logRetryScheduled($retryDecision, $classification);
+    }
+
+    private function persistRetryScheduled(int $attempt, \DateTimeInterface $nextRetryAt): void
+    {
+        LandlordTenantDetailSnapshot::query()
+            ->where('tenant_id', $this->tenantId)
+            ->update([
+                'retry_attempt' => $attempt,
+                'next_retry_at' => $nextRetryAt,
+                'retry_exhausted_at' => null,
+            ]);
+    }
+
+    private function persistRetryExhausted(): void
+    {
+        LandlordTenantDetailSnapshot::query()
+            ->where('tenant_id', $this->tenantId)
+            ->update([
+                'retry_attempt' => $this->attempt,
+                'next_retry_at' => null,
+                'retry_exhausted_at' => now(),
+            ]);
+    }
+
+    private function clearRetryState(): void
+    {
+        LandlordTenantDetailSnapshot::query()
+            ->where('tenant_id', $this->tenantId)
+            ->where(function ($query) {
+                $query->where('retry_attempt', '>', 0)
+                    ->orWhereNotNull('next_retry_at')
+                    ->orWhereNotNull('retry_exhausted_at');
+            })
+            ->update([
+                'retry_attempt' => 0,
+                'next_retry_at' => null,
+                'retry_exhausted_at' => null,
+            ]);
     }
 
     private function logRetryScheduled(array $retryDecision, array $classification): void

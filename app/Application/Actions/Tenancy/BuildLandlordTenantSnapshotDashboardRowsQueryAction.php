@@ -168,6 +168,9 @@ class BuildLandlordTenantSnapshotDashboardRowsQueryAction
                 'snapshots.last_refresh_completed_at',
                 'snapshots.last_refresh_failed_at',
                 'snapshots.last_refresh_error',
+                'snapshots.retry_attempt',
+                'snapshots.next_retry_at',
+                'snapshots.retry_exhausted_at',
             ])
             ->selectRaw('CASE WHEN snapshots.payload_json IS NULL THEN 0 ELSE 1 END as snapshot_has_payload')
             ->selectRaw($this->snapshotStatusExpression().' as snapshot_status_resolved', [$staleCutoff])

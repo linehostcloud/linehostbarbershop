@@ -9,6 +9,7 @@ class ResolveLandlordTenantDetailSnapshotAction
 {
     public function __construct(
         private readonly ResolveLandlordTenantDetailSnapshotStateAction $resolveSnapshotState,
+        private readonly ResolveLandlordTenantSnapshotRetryStateAction $resolveRetryState,
     ) {}
 
     /**
@@ -48,10 +49,18 @@ class ResolveLandlordTenantDetailSnapshotAction
             lastRefreshError: $snapshot?->last_refresh_error,
         );
 
+        $retryState = $this->resolveRetryState->execute(
+            retryAttempt: (int) ($snapshot?->retry_attempt ?? 0),
+            nextRetryAt: $snapshot?->next_retry_at,
+            retryExhaustedAt: $snapshot?->retry_exhausted_at,
+            lastRefreshError: $snapshot?->last_refresh_error,
+        );
+
         return array_merge([
             'model' => $snapshot,
             'payload' => $payload,
             'has_payload' => $hasPayload,
+            'retry' => $retryState,
         ], $state);
     }
 }

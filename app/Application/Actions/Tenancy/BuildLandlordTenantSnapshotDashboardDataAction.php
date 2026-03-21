@@ -16,6 +16,7 @@ class BuildLandlordTenantSnapshotDashboardDataAction
         private readonly ResolveLandlordTenantDetailSnapshotStateAction $resolveSnapshotState,
         private readonly ResolveLandlordTenantSnapshotDashboardFiltersAction $resolveFilters,
         private readonly DetermineLandlordTenantSnapshotPriorityAction $determinePriority,
+        private readonly ResolveLandlordTenantSnapshotRetryStateAction $resolveRetryState,
     ) {}
 
     /**
@@ -124,6 +125,13 @@ class BuildLandlordTenantSnapshotDashboardDataAction
                     generatedAt: $row->snapshot_generated_at,
                 );
 
+                $retryState = $this->resolveRetryState->execute(
+                    retryAttempt: (int) ($row->retry_attempt ?? 0),
+                    nextRetryAt: $row->next_retry_at,
+                    retryExhaustedAt: $row->retry_exhausted_at,
+                    lastRefreshError: $row->last_refresh_error !== null ? (string) $row->last_refresh_error : null,
+                );
+
                 return [
                     'id' => (string) $row->id,
                     'tenant' => [
@@ -153,6 +161,7 @@ class BuildLandlordTenantSnapshotDashboardDataAction
                     'refresh_started_at' => $snapshotState['last_refresh_started_at'],
                     'fallback_conservative' => ! (bool) $row->snapshot_has_payload,
                     'priority' => $priority,
+                    'retry' => $retryState,
                 ];
             })
             ->values();

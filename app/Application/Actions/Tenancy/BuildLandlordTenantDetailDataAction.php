@@ -323,6 +323,7 @@ class BuildLandlordTenantDetailDataAction
             'last_refresh_error' => $snapshot['last_refresh_error'],
             'status_tone' => $statusTone,
             'section_sources' => $sectionSources,
+            'retry' => $snapshot['retry'] ?? [],
         ];
     }
 

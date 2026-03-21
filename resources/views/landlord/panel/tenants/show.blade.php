@@ -98,6 +98,59 @@
             </div>
         </section>
 
+        @php($retryState = $snapshotMeta['retry'] ?? [])
+        @if (($retryState['retry_status'] ?? 'idle') !== 'idle')
+            <section class="rounded-3xl border p-5 {{ ($retryState['retry_status'] ?? '') === 'exhausted' ? 'border-rose-500/30 bg-rose-500/10' : (($retryState['retry_status'] ?? '') === 'scheduled' ? 'border-amber-500/30 bg-amber-500/10' : 'border-sky-500/30 bg-sky-500/10') }}">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-[0.18em] {{ ($retryState['retry_status'] ?? '') === 'exhausted' ? 'text-rose-400' : (($retryState['retry_status'] ?? '') === 'scheduled' ? 'text-amber-400' : 'text-sky-400') }}">
+                            Estado de Retry
+                        </p>
+                        <h2 class="mt-2 text-lg font-semibold text-white">
+                            @if ($retryState['retry_status'] === 'scheduled')
+                                Retry agendado
+                            @elseif ($retryState['retry_status'] === 'running')
+                                Retry em execução
+                            @else
+                                Retry esgotado
+                            @endif
+                        </h2>
+                        @if ($retryState['last_error_summary'])
+                            <p class="mt-2 text-sm text-slate-300">{{ $retryState['last_error_summary'] }}</p>
+                        @endif
+                    </div>
+
+                    <div class="flex flex-wrap gap-3">
+                        <div class="rounded-2xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 text-center">
+                            <p class="text-lg font-bold text-white">{{ $retryState['attempt_label'] ?? '-' }}</p>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500">Tentativa</p>
+                        </div>
+
+                        @if ($retryState['retry_status'] === 'scheduled' && $retryState['next_retry_in_label'])
+                            <div class="rounded-2xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 text-center">
+                                <p class="text-lg font-bold text-amber-300">~{{ $retryState['next_retry_in_label'] }}</p>
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500">Próximo retry</p>
+                            </div>
+                        @endif
+
+                        @if ($retryState['next_retry_at'])
+                            <div class="rounded-2xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 text-center">
+                                <p class="text-sm font-semibold text-slate-200">{{ $retryState['next_retry_at'] }}</p>
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500">Agendado para</p>
+                            </div>
+                        @endif
+
+                        @if ($retryState['retry_exhausted_at'])
+                            <div class="rounded-2xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 text-center">
+                                <p class="text-sm font-semibold text-rose-300">{{ $retryState['retry_exhausted_at'] }}</p>
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500">Esgotado em</p>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+            </section>
+        @endif
+
         <div class="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
             <section class="space-y-6">
                 <div class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl shadow-slate-950/20">

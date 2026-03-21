@@ -422,7 +422,43 @@
                                             </div>
                                         </td>
                                         <td class="px-4 py-4 text-slate-300">
-                                            @if ($tenant['last_failure']['at'] || $tenant['last_failure']['error'])
+                                            @php($retry = $tenant['retry'] ?? [])
+                                            @php($retryStatus = $retry['retry_status'] ?? 'idle')
+
+                                            @if ($retryStatus === 'scheduled')
+                                                <div class="space-y-2">
+                                                    <span class="inline-flex rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200">
+                                                        Retry agendado {{ $retry['attempt_label'] ?? '' }}
+                                                    </span>
+                                                    @if ($retry['next_retry_in_label'])
+                                                        <p class="text-xs text-amber-300">Próximo em ~{{ $retry['next_retry_in_label'] }}</p>
+                                                    @endif
+                                                    @if ($retry['last_error_summary'])
+                                                        <p class="max-w-xs text-xs leading-5 text-slate-500">{{ $retry['last_error_summary'] }}</p>
+                                                    @endif
+                                                </div>
+                                            @elseif ($retryStatus === 'running')
+                                                <div class="space-y-2">
+                                                    <span class="inline-flex rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-200">
+                                                        Retrying {{ $retry['attempt_label'] ?? '' }}
+                                                    </span>
+                                                    @if ($retry['last_error_summary'])
+                                                        <p class="max-w-xs text-xs leading-5 text-slate-500">{{ $retry['last_error_summary'] }}</p>
+                                                    @endif
+                                                </div>
+                                            @elseif ($retryStatus === 'exhausted')
+                                                <div class="space-y-2">
+                                                    <span class="inline-flex rounded-full border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-[11px] font-semibold text-rose-200">
+                                                        Retry esgotado {{ $retry['attempt_label'] ?? '' }}
+                                                    </span>
+                                                    @if ($retry['retry_exhausted_at'])
+                                                        <p class="text-xs text-rose-300">Esgotado em {{ $retry['retry_exhausted_at'] }}</p>
+                                                    @endif
+                                                    @if ($retry['last_error_summary'])
+                                                        <p class="max-w-xs text-xs leading-5 text-slate-500">{{ $retry['last_error_summary'] }}</p>
+                                                    @endif
+                                                </div>
+                                            @elseif ($tenant['last_failure']['at'] || $tenant['last_failure']['error'])
                                                 <div class="space-y-2">
                                                     <p>{{ $tenant['last_failure']['at'] ?: 'Falha sem horário registrado' }}</p>
                                                     <p class="max-w-xs text-xs leading-5 text-slate-500">{{ $tenant['last_failure']['error'] ?: 'Sem mensagem de erro persistida.' }}</p>
