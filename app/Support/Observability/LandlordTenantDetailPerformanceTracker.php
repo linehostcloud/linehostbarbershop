@@ -84,6 +84,14 @@ class LandlordTenantDetailPerformanceTracker
         ];
     }
 
+    public function reset(): void
+    {
+        $this->durationsMs = [];
+        $this->counts = [];
+        $this->meta = [];
+        $this->failures = [];
+    }
+
     private function elapsedMilliseconds(int $startedAt): int
     {
         return max(0, (int) round((hrtime(true) - $startedAt) / 1_000_000));

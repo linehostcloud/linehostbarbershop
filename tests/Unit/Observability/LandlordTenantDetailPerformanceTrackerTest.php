@@ -42,4 +42,30 @@ class LandlordTenantDetailPerformanceTrackerTest extends TestCase
         $this->assertSame(RuntimeException::class, $snapshot['failures'][0]['error_class']);
         $this->assertSame('tenant-1', $snapshot['failures'][0]['tenant_id']);
     }
+
+    public function test_tracker_reset_clears_accumulated_state(): void
+    {
+        $tracker = new LandlordTenantDetailPerformanceTracker();
+
+        $tracker->setCount('snapshot_hit_count', 1);
+        $tracker->setMeta('tenant_slug', 'barbearia-reset');
+        $tracker->measure('detail_data_duration_ms', function (): void {
+            usleep(1000);
+        });
+
+        try {
+            throw new RuntimeException('Falha sintética.');
+        } catch (RuntimeException $exception) {
+            $tracker->recordFailure('landlord.tenants.show.read', $exception);
+        }
+
+        $tracker->reset();
+
+        $this->assertSame([
+            'durations_ms' => [],
+            'counts' => [],
+            'meta' => [],
+            'failures' => [],
+        ], $tracker->snapshot());
+    }
 }

@@ -10,6 +10,7 @@
     @php($statusGovernance = $tenant['state_governance']['status'])
     @php($onboardingGovernance = $tenant['state_governance']['onboarding_stage'])
     @php($suspensionObservability = $tenant['suspension_observability'])
+    @php($snapshotMeta = $tenant['snapshot'])
 
     <div class="mx-auto max-w-7xl space-y-6">
         <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 lg:flex-row lg:items-start lg:justify-between">
@@ -34,6 +35,16 @@
                 >
                     Criar tenant
                 </a>
+                <form method="POST" action="{{ route('landlord.tenants.refresh-detail-snapshot', $tenant['id']) }}">
+                    @csrf
+                    <button
+                        type="submit"
+                        class="inline-flex items-center justify-center rounded-2xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                        @disabled($snapshotMeta['status'] === 'refreshing')
+                    >
+                        {{ $snapshotMeta['status'] === 'refreshing' ? 'Refresh em andamento' : 'Atualizar snapshot' }}
+                    </button>
+                </form>
             </div>
         </header>
 
@@ -43,6 +54,43 @@
                 <p class="font-semibold">{{ data_get($status, 'message') }}</p>
             </section>
         @endif
+
+        <section class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl shadow-slate-950/20">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Snapshot administrativo</p>
+                    <h2 class="mt-2 text-lg font-semibold text-white">{{ $snapshotMeta['label'] }}</h2>
+                    <p class="mt-2 text-sm text-slate-400">{{ $snapshotMeta['detail'] }}</p>
+                    <p class="mt-3 text-xs leading-5 text-slate-500">
+                        Última atualização: {{ $snapshotMeta['generated_at'] ?: 'não gerada' }}.
+                        @if ($snapshotMeta['age_label'])
+                            Idade aproximada: {{ $snapshotMeta['age_label'] }}.
+                        @endif
+                        Status: {{ $tenant['snapshot_status'] }}.
+                    </p>
+                    @if ($snapshotMeta['last_refresh_failed_at'])
+                        <p class="mt-2 text-xs leading-5 text-amber-300">
+                            Última falha registrada em {{ $snapshotMeta['last_refresh_failed_at'] }}.
+                        </p>
+                    @endif
+                </div>
+
+                <div class="flex flex-wrap gap-2">
+                    <span class="rounded-full border px-3 py-1 text-[11px] font-semibold {{ $snapshotMeta['status_tone'] === 'success' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : ($snapshotMeta['status_tone'] === 'warning' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : ($snapshotMeta['status_tone'] === 'error' ? 'border-rose-500/40 bg-rose-500/10 text-rose-200' : 'border-slate-700 bg-slate-950/60 text-slate-200')) }}">
+                        {{ strtoupper($snapshotMeta['status']) }}
+                    </span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[11px] font-semibold text-slate-300">
+                        Provisioning: {{ $snapshotMeta['section_sources']['provisioning'] }}
+                    </span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[11px] font-semibold text-slate-300">
+                        Saúde: {{ $snapshotMeta['section_sources']['operational'] }}
+                    </span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[11px] font-semibold text-slate-300">
+                        Hardening: {{ $snapshotMeta['section_sources']['suspension_observability'] }}
+                    </span>
+                </div>
+            </div>
+        </section>
 
         <div class="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
             <section class="space-y-6">
@@ -89,6 +137,10 @@
                             <dd class="mt-1 text-sm text-slate-100">{{ $tenant['database_name'] ?: 'Não definido' }}</dd>
                         </div>
                     </dl>
+
+                    <p class="mt-4 text-xs leading-5 text-slate-500">
+                        Provisioning lido via {{ $snapshotMeta['section_sources']['provisioning'] }}.
+                    </p>
                 </div>
 
                 <div class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl shadow-slate-950/20">
@@ -97,9 +149,14 @@
                             <h2 class="text-lg font-semibold text-white">Saúde operacional</h2>
                             <p class="mt-1 text-sm text-slate-400">{{ $tenant['provisioning']['detail'] }}</p>
                         </div>
-                        <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200">
-                            {{ $tenant['operational']['summary']['ok_count'] }}/{{ $tenant['operational']['summary']['total_count'] }} itens OK
-                        </span>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200">
+                                {{ $tenant['operational']['summary']['ok_count'] }}/{{ $tenant['operational']['summary']['total_count'] }} itens OK
+                            </span>
+                            <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[11px] font-semibold text-slate-300">
+                                {{ data_get($tenant['operational'], 'data_source', 'snapshot') }}
+                            </span>
+                        </div>
                     </div>
 
                     <div class="mt-5 grid gap-3 md:grid-cols-2">
@@ -172,9 +229,14 @@
                                 Sessões revogadas e pressão recente de bloqueios operacionais por canal.
                             </p>
                         </div>
-                        <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200">
-                            {{ $suspensionObservability['summary']['window_label'] }}
-                        </span>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200">
+                                {{ $suspensionObservability['summary']['window_label'] }}
+                            </span>
+                            <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[11px] font-semibold text-slate-300">
+                                {{ data_get($suspensionObservability, 'data_source', 'snapshot') }}
+                            </span>
+                        </div>
                     </div>
 
                     <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -196,7 +258,7 @@
                             <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Bloqueios recentes</p>
                             <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['summary']['total_count'] }}</p>
                             <p class="mt-2 text-xs leading-5 text-slate-400">
-                                {{ data_get($suspensionObservability, 'availability.available', true) ? 'Eventos operacionais bloqueados/ignorados no período.' : 'Leitura degradada enquanto a trilha landlord desta seção estiver incompleta.' }}
+                                {{ data_get($suspensionObservability, 'availability.available', true) ? 'Eventos operacionais bloqueados/ignorados no período.' : 'Leitura degradada enquanto o snapshot desta seção estiver indisponível.' }}
                             </p>
                         </div>
 
@@ -204,7 +266,7 @@
                             <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Canais afetados</p>
                             <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['summary']['affected_channels_count'] }}</p>
                             <p class="mt-2 text-xs leading-5 text-slate-400">
-                                {{ data_get($suspensionObservability, 'availability.available', true) ? 'Canais com pelo menos uma ocorrência recente.' : 'Os totais podem aparecer zerados até a migration landlord ser aplicada.' }}
+                                {{ data_get($suspensionObservability, 'availability.available', true) ? 'Canais com pelo menos uma ocorrência recente.' : 'Os totais podem aparecer zerados até o próximo refresh do snapshot.' }}
                             </p>
                         </div>
                     </div>
@@ -213,9 +275,11 @@
                         <div class="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
                             <p class="font-semibold">{{ $suspensionObservability['availability']['label'] }}</p>
                             <p class="mt-1">{{ $suspensionObservability['availability']['detail'] }}</p>
-                            <p class="mt-2 text-xs leading-5 text-amber-50/90">
-                                Tabelas ausentes: {{ implode(', ', $suspensionObservability['availability']['missing_tables']) }}.
-                            </p>
+                            @if (data_get($suspensionObservability, 'availability.missing_tables', []) !== [])
+                                <p class="mt-2 text-xs leading-5 text-amber-50/90">
+                                    Tabelas ausentes: {{ implode(', ', $suspensionObservability['availability']['missing_tables']) }}.
+                                </p>
+                            @endif
                         </div>
                     @endif
 
@@ -269,7 +333,7 @@
                                 </div>
                             @empty
                                 <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
-                                    {{ data_get($suspensionObservability, 'availability.available', true) ? 'Nenhum bloqueio operacional recente foi registrado para este tenant.' : 'A leitura dos bloqueios recentes está temporariamente indisponível até a migration landlord ser aplicada.' }}
+                                    {{ data_get($suspensionObservability, 'availability.available', true) ? 'Nenhum bloqueio operacional recente foi registrado para este tenant.' : 'A leitura dos bloqueios recentes está temporariamente indisponível até o próximo refresh do snapshot.' }}
                                 </div>
                             @endforelse
                         </div>

@@ -4,6 +4,7 @@ namespace Tests\Feature\Landlord;
 
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
+use App\Application\Actions\Tenancy\RefreshLandlordTenantDetailSnapshotAction;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Auth\Models\UserAccessToken;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
@@ -268,6 +269,8 @@ class LandlordTenantDetailPanelTest extends TestCase
             'occurred_at' => now(),
         ]);
 
+        $this->refreshDetailSnapshot($tenant);
+
         $this->actingAs($admin)
             ->get(route('landlord.tenants.show', $tenant))
             ->assertOk()
@@ -299,23 +302,24 @@ class LandlordTenantDetailPanelTest extends TestCase
 
         Schema::connection('landlord')->drop('tenant_operational_block_audits');
 
+        $this->refreshDetailSnapshot($tenant);
+
         $this->actingAs($admin)
             ->get(route('landlord.tenants.show', $tenant))
             ->assertOk()
             ->assertSee('Hardening da suspensão')
             ->assertSee('Observabilidade operacional indisponível')
             ->assertSee('tenant_operational_block_audits')
-            ->assertSee('A leitura dos bloqueios recentes está temporariamente indisponível até a migration landlord ser aplicada.');
+            ->assertSee('A leitura dos bloqueios recentes está temporariamente indisponível até o próximo refresh do snapshot.');
 
-        Log::shouldHaveReceived('warning')
+        Log::shouldHaveReceived('info')
             ->withArgs(function (string $message, array $context) use ($tenant): bool {
-                return $message === 'Landlord tenant detail read measured with technical failures.'
+                return $message === 'Landlord tenant detail read measured.'
                     && data_get($context, 'event') === 'landlord.tenants.show.read'
                     && data_get($context, 'tenant_id') === $tenant->id
                     && data_get($context, 'tenant_slug') === $tenant->slug
-                    && data_get($context, 'counts.technical_failure_count') === 1
-                    && data_get($context, 'failures.0.area') === 'suspension_observability.missing_tables'
-                    && data_get($context, 'failures.0.missing_tables') === ['tenant_operational_block_audits'];
+                    && data_get($context, 'counts.snapshot_hit_count') === 1
+                    && data_get($context, 'counts.technical_failure_count', 0) === 0;
             });
     }
 
@@ -326,6 +330,7 @@ class LandlordTenantDetailPanelTest extends TestCase
         $admin = $this->createLandlordAdmin();
         $tenant = $this->provisionTenant('barbearia-detalhe-performance', 'barbearia-detalhe-performance.saas.test');
         $this->createTenantUser($tenant, email: 'owner-detalhe-performance@test.local');
+        $this->refreshDetailSnapshot($tenant);
 
         Log::spy();
 
@@ -342,7 +347,9 @@ class LandlordTenantDetailPanelTest extends TestCase
                     && data_get($context, 'counts.domain_count') === 1
                     && data_get($context, 'counts.membership_count') === 1
                     && data_get($context, 'counts.recent_activity_count') === 0
-                    && data_get($context, 'counts.provisioning_validation_count') === 1
+                    && data_get($context, 'counts.snapshot_hit_count') === 1
+                    && data_get($context, 'counts.snapshot_miss_count') === 0
+                    && data_get($context, 'counts.provisioning_validation_count', 0) === 0
                     && is_int(data_get($context, 'durations_ms.total_duration_ms'))
                     && is_int(data_get($context, 'durations_ms.summary_mapping_duration_ms'))
                     && is_int(data_get($context, 'durations_ms.operational_health_duration_ms'))
@@ -633,6 +640,7 @@ class LandlordTenantDetailPanelTest extends TestCase
             'status' => 'suspended',
             'onboarding_stage' => 'provisioned',
         ])->save();
+        $this->refreshDetailSnapshot($tenant);
 
         $this->actingAs($admin)
             ->get(route('landlord.tenants.show', $tenant))
@@ -743,6 +751,7 @@ class LandlordTenantDetailPanelTest extends TestCase
     {
         $admin = $this->createLandlordAdmin();
         $tenant = $this->createLandlordTenantWithoutSchema('barbearia-schema-pendente', 'barbearia-schema-pendente.saas.test');
+        $this->refreshDetailSnapshot($tenant);
 
         $this->actingAs($admin)
             ->get(route('landlord.tenants.show', $tenant))
@@ -906,6 +915,11 @@ class LandlordTenantDetailPanelTest extends TestCase
     private function ensureTenantDefaultAutomations(Tenant $tenant, User $actor): void
     {
         app(EnsureLandlordTenantDefaultAutomationsAction::class)->execute($tenant, $actor);
+    }
+
+    private function refreshDetailSnapshot(Tenant $tenant, string $source = 'test'): void
+    {
+        app(RefreshLandlordTenantDetailSnapshotAction::class)->execute($tenant, $source);
     }
 
     /**

@@ -9,6 +9,8 @@ use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\GuardTenantOperationalCommandAction;
 use App\Application\Actions\Tenancy\MigrateTenantSchemaAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
+use App\Application\Actions\Tenancy\RefreshLandlordTenantDetailSnapshotAction;
+use App\Application\Actions\Tenancy\ResolveLandlordTenantDetailSnapshotAction;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
 use App\Domain\Observability\Models\OutboxEvent;
 use App\Domain\Tenant\Models\Tenant;
@@ -198,6 +200,79 @@ Artisan::command('tenancy:provision-tenant
 
     return self::SUCCESS;
 })->purpose('Provisiona tenant, banco, dominio, owner opcional e migrations');
+
+Artisan::command('landlord:refresh-tenant-detail-snapshots
+    {--tenant=* : Slugs ou ULIDs de tenants especificos}
+    {--stale-only : Atualiza apenas snapshots ausentes, stale, falhos ou em refresh}', function (
+    RefreshLandlordTenantDetailSnapshotAction $refreshSnapshot,
+    ResolveLandlordTenantDetailSnapshotAction $resolveSnapshot,
+) {
+    $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
+    $staleOnly = (bool) $this->option('stale-only');
+    $tenants = Tenant::query()
+        ->with('detailSnapshot')
+        ->when(
+            $tenantIdentifiers !== [],
+            fn ($query) => $query->where(function ($tenantQuery) use ($tenantIdentifiers): void {
+                $tenantQuery
+                    ->whereIn('id', $tenantIdentifiers)
+                    ->orWhereIn('slug', $tenantIdentifiers);
+            }),
+        )
+        ->orderBy('slug')
+        ->get();
+
+    if ($tenants->isEmpty()) {
+        $this->warn('Nenhum tenant encontrado para refresh de snapshot.');
+
+        return self::SUCCESS;
+    }
+
+    $summary = [
+        'refreshed' => 0,
+        'skipped_fresh' => 0,
+        'skipped_locked' => 0,
+        'failed' => 0,
+    ];
+
+    foreach ($tenants as $tenant) {
+        if ($staleOnly && $resolveSnapshot->execute($tenant)['status'] === 'ready') {
+            $summary['skipped_fresh']++;
+
+            continue;
+        }
+
+        try {
+            $result = $refreshSnapshot->execute($tenant, 'scheduled');
+        } catch (Throwable $throwable) {
+            $summary['failed']++;
+            $this->error(sprintf('[%s] %s', $tenant->slug, $throwable->getMessage()));
+
+            continue;
+        }
+
+        if ($result['status'] === 'skipped_locked') {
+            $summary['skipped_locked']++;
+            $this->warn(sprintf('[%s] refresh ignorado por lock em andamento.', $tenant->slug));
+
+            continue;
+        }
+
+        $summary['refreshed']++;
+        $this->line(sprintf('[%s] snapshot atualizado com sucesso.', $tenant->slug));
+    }
+
+    $this->newLine();
+    $this->info(sprintf(
+        'Tenant detail snapshots: refreshed=%d skipped_fresh=%d skipped_locked=%d failed=%d',
+        $summary['refreshed'],
+        $summary['skipped_fresh'],
+        $summary['skipped_locked'],
+        $summary['failed'],
+    ));
+
+    return $summary['failed'] > 0 ? self::FAILURE : self::SUCCESS;
+})->purpose('Atualiza snapshots administrativos do detalhe dos tenants no landlord');
 
 Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants especificos} {--limit=50 : Quantidade maxima de eventos por tenant}', function (
     TenantDatabaseManager $databaseManager,
@@ -811,3 +886,9 @@ Schedule::command('tenancy:process-outbox')->everyMinute()->withoutOverlapping()
 Schedule::command('tenancy:process-whatsapp-automations')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('tenancy:run-whatsapp-agent')->everyTenMinutes()->withoutOverlapping();
 Schedule::command('tenancy:whatsapp-housekeeping')->hourly()->withoutOverlapping();
+
+if ((bool) config('landlord.tenants.detail_snapshot.scheduled_refresh_enabled', true)) {
+    Schedule::command('landlord:refresh-tenant-detail-snapshots --stale-only')
+        ->everyFifteenMinutes()
+        ->withoutOverlapping();
+}

@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Crypt;
 
 class Tenant extends LandlordModel
@@ -61,6 +62,11 @@ class Tenant extends LandlordModel
     public function memberships(): HasMany
     {
         return $this->hasMany(TenantMembership::class);
+    }
+
+    public function detailSnapshot(): HasOne
+    {
+        return $this->hasOne(LandlordTenantDetailSnapshot::class);
     }
 
     public function users(): BelongsToMany

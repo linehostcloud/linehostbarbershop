@@ -15,7 +15,7 @@ class MapLandlordTenantSummaryAction
     /**
      * @return array<string, mixed>
      */
-    public function execute(Tenant $tenant): array
+    public function execute(Tenant $tenant, ?array $provisioning = null): array
     {
         $primaryDomain = $tenant->domains->firstWhere('is_primary', true);
         $ownerMembership = $tenant->memberships
@@ -37,7 +37,7 @@ class MapLandlordTenantSummaryAction
                 'email' => $ownerMembership?->user?->email,
             ],
             'created_at' => $tenant->created_at?->setTimezone(config('app.timezone', 'UTC'))->format('d/m/Y H:i'),
-            'provisioning' => $this->determineProvisioningStatus->execute($tenant),
+            'provisioning' => $provisioning ?? $this->determineProvisioningStatus->execute($tenant),
         ];
     }
 

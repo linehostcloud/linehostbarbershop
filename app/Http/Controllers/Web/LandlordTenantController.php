@@ -12,7 +12,9 @@ use App\Application\Actions\Tenancy\BuildLandlordTenantIndexReadContextAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\ChangeLandlordTenantStatusAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
+use App\Application\Actions\Tenancy\MarkLandlordTenantDetailSnapshotStaleAction;
 use App\Application\Actions\Tenancy\ProvisionTenantFromLandlordPanelAction;
+use App\Application\Actions\Tenancy\RefreshLandlordTenantDetailSnapshotAction;
 use App\Application\Actions\Tenancy\ResolveLandlordTenantIndexFiltersAction;
 use App\Application\Actions\Tenancy\RunLandlordTenantSchemaSyncAction;
 use App\Application\Actions\Tenancy\SetLandlordTenantPrimaryDomainAction;
@@ -173,6 +175,7 @@ class LandlordTenantController extends Controller
         UpdateLandlordTenantBasicsRequest $request,
         Tenant $tenant,
         UpdateLandlordTenantBasicsAction $updateTenantBasics,
+        MarkLandlordTenantDetailSnapshotStaleAction $markSnapshotStale,
     ): RedirectResponse {
         $actor = $request->user();
 
@@ -193,6 +196,8 @@ class LandlordTenantController extends Controller
                 ]);
         }
 
+        $markSnapshotStale->execute($tenant);
+
         return redirect()
             ->route('landlord.tenants.show', $tenant)
             ->with('status', [
@@ -207,6 +212,7 @@ class LandlordTenantController extends Controller
         ChangeLandlordTenantStatusRequest $request,
         Tenant $tenant,
         ChangeLandlordTenantStatusAction $changeTenantStatus,
+        MarkLandlordTenantDetailSnapshotStaleAction $markSnapshotStale,
     ): RedirectResponse {
         $actor = $request->user();
 
@@ -225,6 +231,8 @@ class LandlordTenantController extends Controller
                     'status' => $throwable->getMessage(),
                 ], 'tenantStatusTransition');
         }
+
+        $markSnapshotStale->execute($tenant);
 
         return redirect()
             ->route('landlord.tenants.show', $tenant)
@@ -277,6 +285,7 @@ class LandlordTenantController extends Controller
         StoreLandlordTenantDomainRequest $request,
         Tenant $tenant,
         AddLandlordTenantDomainAction $addTenantDomain,
+        MarkLandlordTenantDetailSnapshotStaleAction $markSnapshotStale,
     ): RedirectResponse {
         $actor = $request->user();
 
@@ -297,6 +306,8 @@ class LandlordTenantController extends Controller
                 ]);
         }
 
+        $markSnapshotStale->execute($tenant);
+
         return redirect()
             ->route('landlord.tenants.show', $tenant)
             ->with('status', [
@@ -312,6 +323,7 @@ class LandlordTenantController extends Controller
         Tenant $tenant,
         TenantDomain $domain,
         SetLandlordTenantPrimaryDomainAction $setPrimaryDomain,
+        MarkLandlordTenantDetailSnapshotStaleAction $markSnapshotStale,
     ): RedirectResponse {
         $actor = $request->user();
 
@@ -327,6 +339,8 @@ class LandlordTenantController extends Controller
             ]);
         }
 
+        $markSnapshotStale->execute($tenant);
+
         return redirect()
             ->route('landlord.tenants.show', $tenant)
             ->with('status', [
@@ -341,6 +355,7 @@ class LandlordTenantController extends Controller
         Request $request,
         Tenant $tenant,
         RunLandlordTenantSchemaSyncAction $runSchemaSync,
+        MarkLandlordTenantDetailSnapshotStaleAction $markSnapshotStale,
     ): RedirectResponse {
         $actor = $request->user();
 
@@ -355,6 +370,8 @@ class LandlordTenantController extends Controller
             ]);
         }
 
+        $markSnapshotStale->execute($tenant);
+
         return redirect()
             ->route('landlord.tenants.show', $tenant)
             ->with('status', [
@@ -367,6 +384,7 @@ class LandlordTenantController extends Controller
         Request $request,
         Tenant $tenant,
         EnsureLandlordTenantDefaultAutomationsAction $ensureDefaultAutomations,
+        MarkLandlordTenantDetailSnapshotStaleAction $markSnapshotStale,
     ): RedirectResponse {
         $actor = $request->user();
 
@@ -381,6 +399,8 @@ class LandlordTenantController extends Controller
             ]);
         }
 
+        $markSnapshotStale->execute($tenant);
+
         return redirect()
             ->route('landlord.tenants.show', $tenant)
             ->with('status', [
@@ -390,6 +410,41 @@ class LandlordTenantController extends Controller
                     $tenant->trade_name,
                     $count,
                 ),
+            ]);
+    }
+
+    public function refreshDetailSnapshot(
+        Request $request,
+        Tenant $tenant,
+        RefreshLandlordTenantDetailSnapshotAction $refreshSnapshot,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+
+        try {
+            $result = $refreshSnapshot->execute($tenant, 'manual');
+        } catch (Throwable $throwable) {
+            return back()->with('status', [
+                'type' => 'error',
+                'message' => $throwable->getMessage(),
+            ]);
+        }
+
+        if ($result['status'] === 'skipped_locked') {
+            return redirect()
+                ->route('landlord.tenants.show', $tenant)
+                ->with('status', [
+                    'type' => 'error',
+                    'message' => sprintf('Já existe um refresh de snapshot em andamento para o tenant "%s".', $tenant->trade_name),
+                ]);
+        }
+
+        return redirect()
+            ->route('landlord.tenants.show', $tenant)
+            ->with('status', [
+                'type' => 'success',
+                'message' => sprintf('Snapshot administrativo do tenant "%s" atualizado com sucesso.', $tenant->fresh()->trade_name),
             ]);
     }
 }

@@ -32,6 +32,8 @@ Route::middleware('landlord.central')->prefix((string) config('landlord.panel.pa
         Route::get('/tenants/novo', [LandlordTenantController::class, 'create'])->name('landlord.tenants.create');
         Route::post('/tenants', [LandlordTenantController::class, 'store'])->name('landlord.tenants.store');
         Route::get('/tenants/{tenant}', [LandlordTenantController::class, 'show'])->name('landlord.tenants.show');
+        Route::post('/tenants/{tenant}/snapshot/refresh', [LandlordTenantController::class, 'refreshDetailSnapshot'])
+            ->name('landlord.tenants.refresh-detail-snapshot');
         Route::patch('/tenants/{tenant}/dados-basicos', [LandlordTenantController::class, 'updateBasics'])
             ->name('landlord.tenants.update-basics');
         Route::patch('/tenants/{tenant}/status', [LandlordTenantController::class, 'changeStatus'])
