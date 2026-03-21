@@ -9,6 +9,7 @@ use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\GuardTenantOperationalCommandAction;
 use App\Application\Actions\Tenancy\MigrateTenantSchemaAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
+use App\Application\Actions\Tenancy\ReconcileLandlordSnapshotBatchesAction;
 use App\Application\Actions\Tenancy\RefreshLandlordTenantDetailSnapshotAction;
 use App\Application\Actions\Tenancy\ResolveLandlordTenantDetailSnapshotAction;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -273,6 +274,37 @@ Artisan::command('landlord:refresh-tenant-detail-snapshots
 
     return $summary['failed'] > 0 ? self::FAILURE : self::SUCCESS;
 })->purpose('Atualiza snapshots administrativos do detalhe dos tenants no landlord');
+
+Artisan::command('landlord:reconcile-snapshot-batches', function (
+    ReconcileLandlordSnapshotBatchesAction $reconcile,
+) {
+    $this->info('Reconciliando batches de snapshot em estado running...');
+
+    $result = $reconcile->execute();
+
+    if ($result['scanned'] === 0) {
+        $this->info('Nenhum batch stuck encontrado.');
+
+        return self::SUCCESS;
+    }
+
+    foreach ($result['batches'] as $batch) {
+        $this->warn(sprintf(
+            '[%s] batch reconciliado: running → %s',
+            $batch['id'],
+            $batch['new_status'],
+        ));
+    }
+
+    $this->newLine();
+    $this->info(sprintf(
+        'Reconciliação concluída: scanned=%d reconciled=%d',
+        $result['scanned'],
+        $result['reconciled'],
+    ));
+
+    return self::SUCCESS;
+})->purpose('Reconcilia batches de snapshot stuck que ficaram em running indefinidamente');
 
 Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants especificos} {--limit=50 : Quantidade maxima de eventos por tenant}', function (
     TenantDatabaseManager $databaseManager,
@@ -892,3 +924,7 @@ if ((bool) config('landlord.tenants.detail_snapshot.scheduled_refresh_enabled', 
         ->everyFifteenMinutes()
         ->withoutOverlapping();
 }
+
+Schedule::command('landlord:reconcile-snapshot-batches')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();

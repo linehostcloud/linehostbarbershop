@@ -9,6 +9,7 @@ use App\Application\Actions\Tenancy\BuildLandlordDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexReadContextAction;
+use App\Application\Actions\Tenancy\BuildLandlordSnapshotBatchHistoryDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantSnapshotDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\ChangeLandlordTenantStatusAction;
@@ -108,6 +109,7 @@ class LandlordTenantController extends Controller
     public function snapshotDashboard(
         Request $request,
         BuildLandlordTenantSnapshotDashboardDataAction $buildSnapshotDashboard,
+        BuildLandlordSnapshotBatchHistoryDataAction $buildBatchHistory,
         ResolveLandlordTenantSnapshotDashboardFiltersAction $resolveFilters,
     ): View {
         $filters = $resolveFilters->execute($request->query());
@@ -118,6 +120,7 @@ class LandlordTenantController extends Controller
                 'filters' => $filters,
                 'filterOptions' => $resolveFilters->options(),
                 'hasActiveFilters' => $resolveFilters->hasActiveFilters($filters),
+                'batchHistory' => $buildBatchHistory->execute(),
                 'navigation' => [
                     'active' => 'snapshots',
                 ],

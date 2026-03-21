@@ -4,6 +4,7 @@ namespace App\Application\Actions\Tenancy;
 
 use App\Application\Actions\Auth\RecordAuditLogAction;
 use App\Application\Actions\Observability\RecordLandlordTenantSnapshotBatchRefreshAction;
+use App\Domain\Tenant\Models\LandlordSnapshotBatchExecution;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use App\Jobs\RefreshLandlordTenantDetailSnapshotJob;
@@ -172,6 +173,7 @@ class QueueLandlordTenantSnapshotBatchRefreshAction
                     RefreshLandlordTenantDetailSnapshotJob::dispatch(
                         tenantId: (string) $tenant->getKey(),
                         source: $this->dispatchSource($mode),
+                        batchId: $batchId,
                     );
                     $summary['dispatched_count']++;
 
@@ -194,6 +196,7 @@ class QueueLandlordTenantSnapshotBatchRefreshAction
             }
 
             $this->resolveResultStatus($summary);
+            $this->persistBatchExecution($batchId, $mode, $actor, $summary, $filters);
 
             $context = array_merge($context, [
                 'matched_count' => $summary['matched_count'],
@@ -364,6 +367,63 @@ class QueueLandlordTenantSnapshotBatchRefreshAction
     private function filterContext(array $filters): array
     {
         return array_filter($filters, static fn (string $value): bool => $value !== '');
+    }
+
+    /**
+     * @param  array{
+     *     result_status:string,
+     *     batch_id:string,
+     *     mode:string,
+     *     mode_label:string,
+     *     filters:array<string, string>,
+     *     selected_count:int,
+     *     matched_count:int,
+     *     eligible_count:int,
+     *     dispatched_count:int,
+     *     skipped_locked_count:int,
+     *     skipped_refreshing_count:int,
+     *     skipped_healthy_count:int,
+     *     skipped_cooldown_count:int,
+     *     dispatch_failed_count:int,
+     *     duplicate_submission:bool
+     * }  $summary
+     * @param  array<string, string>  $filters
+     */
+    private function persistBatchExecution(string $batchId, string $mode, User $actor, array $summary, array $filters): void
+    {
+        if ($summary['dispatched_count'] === 0) {
+            return;
+        }
+
+        try {
+            LandlordSnapshotBatchExecution::query()->create([
+                'id' => $batchId,
+                'type' => $mode,
+                'type_label' => $this->modeLabel($mode),
+                'actor_id' => $actor->getKey(),
+                'status' => 'running',
+                'total_target' => $summary['matched_count'],
+                'total_queued' => $summary['dispatched_count'],
+                'total_succeeded' => 0,
+                'total_failed' => 0,
+                'total_skipped' => $summary['skipped_locked_count']
+                    + $summary['skipped_refreshing_count']
+                    + $summary['skipped_healthy_count']
+                    + $summary['skipped_cooldown_count'],
+                'metadata_json' => [
+                    'filters' => $this->filterContext($filters),
+                    'dispatch_failed_count' => $summary['dispatch_failed_count'],
+                    'eligible_count' => $summary['eligible_count'],
+                    'dispatch_skipped_count' => $summary['skipped_locked_count']
+                        + $summary['skipped_refreshing_count']
+                        + $summary['skipped_healthy_count']
+                        + $summary['skipped_cooldown_count'],
+                ],
+                'started_at' => now(),
+            ]);
+        } catch (Throwable) {
+            // Batch tracking is non-critical — do not break the dispatch flow.
+        }
     }
 
     /**

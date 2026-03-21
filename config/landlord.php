@@ -24,6 +24,7 @@ return [
             'lock_seconds' => (int) env('LANDLORD_TENANT_DETAIL_SNAPSHOT_LOCK_SECONDS', 300),
             'batch_refresh_cooldown_seconds' => (int) env('LANDLORD_TENANT_DETAIL_SNAPSHOT_BATCH_REFRESH_COOLDOWN_SECONDS', 120),
             'batch_submission_lock_seconds' => (int) env('LANDLORD_TENANT_DETAIL_SNAPSHOT_BATCH_SUBMISSION_LOCK_SECONDS', 15),
+            'batch_stuck_after_seconds' => (int) env('LANDLORD_TENANT_DETAIL_SNAPSHOT_BATCH_STUCK_AFTER_SECONDS', 900),
             'scheduled_refresh_enabled' => filter_var(env('LANDLORD_TENANT_DETAIL_SNAPSHOT_SCHEDULED_REFRESH_ENABLED', true), FILTER_VALIDATE_BOOL),
         ],
         'defaults' => [

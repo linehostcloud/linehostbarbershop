@@ -2,6 +2,10 @@
 
 @section('title', 'Snapshots dos tenants')
 
+@php
+    use Illuminate\Support\Str;
+@endphp
+
 @section('content')
     @php
         $batchSelectedIds = collect(old('selected_ids', []))
@@ -455,5 +459,93 @@
                 </div>
             @endif
         </section>
+        @if (isset($batchHistory) && $batchHistory->isNotEmpty())
+            <section class="rounded-3xl border border-slate-800 bg-slate-900/80 p-4 shadow-xl shadow-slate-950/20">
+                <div class="mb-4 px-1">
+                    <h2 class="text-lg font-semibold text-white">Histórico de execuções em lote</h2>
+                    <p class="mt-1 text-sm text-slate-400">Últimas {{ $batchHistory->count() }} execuções de refresh em lote com rastreamento de resultado por job.</p>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-800 text-sm">
+                        <thead>
+                            <tr class="text-left text-xs uppercase tracking-[0.18em] text-slate-400">
+                                <th class="px-4 py-3 font-medium">Lote</th>
+                                <th class="px-4 py-3 font-medium">Modo</th>
+                                <th class="px-4 py-3 font-medium">Status</th>
+                                <th class="px-4 py-3 font-medium">Progresso</th>
+                                <th class="px-4 py-3 font-medium">Duração</th>
+                                <th class="px-4 py-3 font-medium">Operador</th>
+                                <th class="px-4 py-3 font-medium">Início</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 text-slate-100">
+                            @foreach ($batchHistory as $batch)
+                                @php
+                                    $batchToneClasses = match ($batch['status_tone']) {
+                                        'emerald' => 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+                                        'sky' => 'border-sky-500/40 bg-sky-500/10 text-sky-200',
+                                        'amber' => 'border-amber-500/40 bg-amber-500/10 text-amber-200',
+                                        default => 'border-rose-500/40 bg-rose-500/10 text-rose-200',
+                                    };
+                                    $progressBarColor = match (true) {
+                                        $batch['is_stuck'] => 'bg-rose-400',
+                                        $batch['status'] === 'completed' => 'bg-emerald-400',
+                                        $batch['status'] === 'failed' => 'bg-rose-400',
+                                        $batch['status'] === 'partial' => 'bg-amber-400',
+                                        default => 'bg-sky-400',
+                                    };
+                                @endphp
+                                <tr class="align-top {{ $batch['is_stuck'] ? 'bg-rose-500/5' : '' }}">
+                                    <td class="px-4 py-4">
+                                        <p class="font-mono text-xs text-slate-400" title="{{ $batch['id'] }}">{{ Str::limit($batch['id'], 12, '…') }}</p>
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <span class="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-200">
+                                            {{ $batch['type_label'] }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <span class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold {{ $batchToneClasses }}">
+                                            {{ $batch['status_label'] }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <div class="space-y-2">
+                                            <div class="flex items-center gap-2">
+                                                <div class="h-1.5 w-20 overflow-hidden rounded-full bg-slate-700">
+                                                    <div class="h-full rounded-full {{ $progressBarColor }}" style="width: {{ $batch['progress_percentage'] }}%"></div>
+                                                </div>
+                                                <span class="text-xs font-semibold {{ $batch['is_stuck'] ? 'text-rose-300' : 'text-slate-300' }}">{{ $batch['progress_percentage'] }}%</span>
+                                            </div>
+                                            <div class="space-y-0.5 text-xs">
+                                                <p><span class="text-emerald-300">{{ $batch['total_succeeded'] }}</span> ok</p>
+                                                @if ($batch['total_failed'] > 0)
+                                                    <p><span class="text-rose-300">{{ $batch['total_failed'] }}</span> falha(s)</p>
+                                                @endif
+                                                @if ($batch['total_skipped'] > 0)
+                                                    <p><span class="text-amber-300">{{ $batch['total_skipped'] }}</span> ignorado(s)</p>
+                                                @endif
+                                                <p class="text-slate-500">{{ $batch['total_queued'] }} enfileirado(s)</p>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-4 py-4 text-xs text-slate-300">
+                                        {{ $batch['duration_label'] ?? 'Em andamento' }}
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <p class="text-xs text-slate-300">{{ $batch['actor_name'] }}</p>
+                                        <p class="text-[11px] text-slate-500">{{ $batch['actor_email'] }}</p>
+                                    </td>
+                                    <td class="px-4 py-4 text-xs text-slate-400">
+                                        {{ $batch['started_at'] }}
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        @endif
     </div>
 @endsection
