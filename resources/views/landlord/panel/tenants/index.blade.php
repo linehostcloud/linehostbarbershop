@@ -12,7 +12,7 @@
         $isFilterActive = static fn (string $key, string $value): bool => ($filters[$key] ?? '') === $value;
     @endphp
 
-    <div class="mx-auto max-w-7xl space-y-6">
+    <div class="w-full space-y-6">
         <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 lg:flex-row lg:items-center lg:justify-between">
             <div class="space-y-2">
                 <p class="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">Painel SaaS</p>
@@ -28,6 +28,12 @@
                     class="inline-flex items-center justify-center rounded-2xl border px-4 py-3 text-sm font-semibold transition {{ ($navigation['active'] ?? '') === 'tenants' ? 'border-cyan-400 bg-cyan-400 text-slate-950' : 'border-slate-700 text-slate-100 hover:border-slate-500 hover:bg-slate-800' }}"
                 >
                     Tenants
+                </a>
+                <a
+                    href="{{ route('landlord.tenants.snapshots') }}"
+                    class="inline-flex items-center justify-center rounded-2xl border px-4 py-3 text-sm font-semibold transition {{ ($navigation['active'] ?? '') === 'snapshots' ? 'border-cyan-400 bg-cyan-400 text-slate-950' : 'border-slate-700 text-slate-100 hover:border-slate-500 hover:bg-slate-800' }}"
+                >
+                    Snapshots
                 </a>
                 <a
                     href="{{ route('landlord.tenants.create') }}"

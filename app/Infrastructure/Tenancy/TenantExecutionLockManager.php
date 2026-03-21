@@ -56,6 +56,11 @@ class TenantExecutionLockManager
         return $this->lockKey($this->tenantScopeKey($tenant), $operation);
     }
 
+    public function isLockedForTenant(Tenant $tenant, string $operation): bool
+    {
+        return $this->isLocked($this->tenantScopeKey($tenant), $operation);
+    }
+
     public function lockKeyForCurrentTenantConnection(string $operation): string
     {
         return $this->lockKey($this->currentTenantConnectionScopeKey(), $operation);
@@ -96,6 +101,19 @@ class TenantExecutionLockManager
         $lock = Cache::lock($this->lockKey($scope, $operation), max(1, $seconds));
 
         return $lock->get() ? $lock : null;
+    }
+
+    private function isLocked(string $scope, string $operation): bool
+    {
+        $lock = Cache::lock($this->lockKey($scope, $operation), 1);
+
+        if (! $lock->get()) {
+            return true;
+        }
+
+        $lock->release();
+
+        return false;
     }
 
     private function tenantScopeKey(Tenant $tenant): string

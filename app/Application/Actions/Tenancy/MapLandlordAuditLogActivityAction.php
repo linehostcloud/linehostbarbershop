@@ -54,6 +54,7 @@ class MapLandlordAuditLogActivityAction
             'landlord_tenant.primary_domain_updated' => 'Domínio principal atualizado',
             'landlord_tenant.status_changed' => 'Status do tenant atualizado',
             'landlord_tenant.onboarding_stage_transitioned' => 'Onboarding atualizado',
+            'landlord_tenant.detail_snapshot_batch_refresh_queued' => 'Refresh de snapshot enfileirado',
             default => 'Evento administrativo',
         };
     }
@@ -74,6 +75,7 @@ class MapLandlordAuditLogActivityAction
             'landlord_tenant.primary_domain_updated' => $this->primaryDomainDetail($after),
             'landlord_tenant.status_changed' => $this->statusChangedDetail($after, $metadata),
             'landlord_tenant.onboarding_stage_transitioned' => $this->onboardingStageDetail($after, $metadata),
+            'landlord_tenant.detail_snapshot_batch_refresh_queued' => $this->detailSnapshotBatchRefreshQueuedDetail($metadata),
             default => 'Evento administrativo registrado para este tenant.',
         };
     }
@@ -234,6 +236,26 @@ class MapLandlordAuditLogActivityAction
         return $parts !== []
             ? implode(' ', $parts)
             : 'Onboarding do tenant atualizado.';
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    private function detailSnapshotBatchRefreshQueuedDetail(array $metadata): string
+    {
+        $modeLabel = trim((string) ($metadata['mode_label'] ?? 'refresh em lote'));
+        $snapshotStatus = trim((string) ($metadata['snapshot_status'] ?? ''));
+        $parts = [sprintf('%s solicitado pelo dashboard operacional.', $modeLabel)];
+
+        if ($snapshotStatus !== '') {
+            $parts[] = sprintf('Estado atual do snapshot: %s.', $this->labelValue($snapshotStatus));
+        }
+
+        if (filled($metadata['batch_id'] ?? null)) {
+            $parts[] = sprintf('Lote %s.', $metadata['batch_id']);
+        }
+
+        return implode(' ', $parts);
     }
 
     private function fieldLabel(string $field): string

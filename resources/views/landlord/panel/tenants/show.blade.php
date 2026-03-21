@@ -12,7 +12,7 @@
     @php($suspensionObservability = $tenant['suspension_observability'])
     @php($snapshotMeta = $tenant['snapshot'])
 
-    <div class="mx-auto max-w-7xl space-y-6">
+    <div class="w-full space-y-6">
         <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 lg:flex-row lg:items-start lg:justify-between">
             <div class="space-y-2">
                 <p class="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">Painel SaaS</p>
@@ -34,6 +34,12 @@
                     class="inline-flex items-center justify-center rounded-2xl border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-slate-500 hover:bg-slate-800"
                 >
                     Criar tenant
+                </a>
+                <a
+                    href="{{ route('landlord.tenants.snapshots') }}"
+                    class="inline-flex items-center justify-center rounded-2xl border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-slate-500 hover:bg-slate-800"
+                >
+                    Dashboard snapshots
                 </a>
                 <form method="POST" action="{{ route('landlord.tenants.refresh-detail-snapshot', $tenant['id']) }}">
                     @csrf

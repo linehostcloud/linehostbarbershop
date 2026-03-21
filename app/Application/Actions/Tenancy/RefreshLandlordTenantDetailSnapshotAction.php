@@ -12,7 +12,7 @@ use Throwable;
 
 class RefreshLandlordTenantDetailSnapshotAction
 {
-    private const LOCK_OPERATION = 'landlord_tenant_detail_snapshot_refresh';
+    public const LOCK_OPERATION = 'landlord_tenant_detail_snapshot_refresh';
 
     public function __construct(
         private readonly BuildLandlordTenantDetailSnapshotPayloadAction $buildSnapshotPayload,

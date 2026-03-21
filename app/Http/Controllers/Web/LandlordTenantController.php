@@ -9,13 +9,16 @@ use App\Application\Actions\Tenancy\BuildLandlordDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexReadContextAction;
+use App\Application\Actions\Tenancy\BuildLandlordTenantSnapshotDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\ChangeLandlordTenantStatusAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Application\Actions\Tenancy\MarkLandlordTenantDetailSnapshotStaleAction;
 use App\Application\Actions\Tenancy\ProvisionTenantFromLandlordPanelAction;
+use App\Application\Actions\Tenancy\QueueLandlordTenantSnapshotBatchRefreshAction;
 use App\Application\Actions\Tenancy\RefreshLandlordTenantDetailSnapshotAction;
 use App\Application\Actions\Tenancy\ResolveLandlordTenantIndexFiltersAction;
+use App\Application\Actions\Tenancy\ResolveLandlordTenantSnapshotDashboardFiltersAction;
 use App\Application\Actions\Tenancy\RunLandlordTenantSchemaSyncAction;
 use App\Application\Actions\Tenancy\SetLandlordTenantPrimaryDomainAction;
 use App\Application\Actions\Tenancy\TransitionLandlordTenantOnboardingStageAction;
@@ -24,6 +27,7 @@ use App\Domain\Tenant\Models\Tenant;
 use App\Domain\Tenant\Models\TenantDomain;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Web\ChangeLandlordTenantStatusRequest;
+use App\Http\Requests\Web\QueueLandlordTenantSnapshotBatchRefreshRequest;
 use App\Http\Requests\Web\StoreLandlordTenantDomainRequest;
 use App\Http\Requests\Web\StoreLandlordTenantRequest;
 use App\Http\Requests\Web\TransitionLandlordTenantOnboardingStageRequest;
@@ -99,6 +103,54 @@ class LandlordTenantController extends Controller
                 'plan_code' => (string) config('landlord.tenants.defaults.plan_code', 'starter'),
             ],
         ]);
+    }
+
+    public function snapshotDashboard(
+        Request $request,
+        BuildLandlordTenantSnapshotDashboardDataAction $buildSnapshotDashboard,
+        ResolveLandlordTenantSnapshotDashboardFiltersAction $resolveFilters,
+    ): View {
+        $filters = $resolveFilters->execute($request->query());
+
+        return view('landlord.panel.tenants.snapshots', array_merge(
+            $buildSnapshotDashboard->execute($filters),
+            [
+                'filters' => $filters,
+                'filterOptions' => $resolveFilters->options(),
+                'hasActiveFilters' => $resolveFilters->hasActiveFilters($filters),
+                'navigation' => [
+                    'active' => 'snapshots',
+                ],
+            ],
+        ));
+    }
+
+    public function queueSnapshotBatchRefresh(
+        QueueLandlordTenantSnapshotBatchRefreshRequest $request,
+        QueueLandlordTenantSnapshotBatchRefreshAction $queueBatchRefresh,
+        ResolveLandlordTenantSnapshotDashboardFiltersAction $resolveFilters,
+    ): RedirectResponse {
+        $actor = $request->user();
+
+        abort_unless($actor instanceof User, 403);
+
+        $filters = $resolveFilters->execute($request->validated());
+
+        try {
+            $result = $queueBatchRefresh->execute(
+                actor: $actor,
+                mode: (string) $request->validated('mode'),
+                filters: $filters,
+                selectedTenantIds: array_values((array) $request->validated('selected_ids', [])),
+            );
+        } catch (Throwable $throwable) {
+            return back()->with('status', [
+                'type' => 'error',
+                'message' => $throwable->getMessage(),
+            ]);
+        }
+
+        return back()->with('status', $this->snapshotBatchRefreshStatusPayload($result));
     }
 
     public function store(
@@ -446,5 +498,102 @@ class LandlordTenantController extends Controller
                 'type' => 'success',
                 'message' => sprintf('Snapshot administrativo do tenant "%s" atualizado com sucesso.', $tenant->fresh()->trade_name),
             ]);
+    }
+
+    /**
+     * @param  array{
+     *     result_status:string,
+     *     batch_id:string,
+     *     mode:string,
+     *     mode_label:string,
+     *     filters:array<string, string>,
+     *     selected_count:int,
+     *     matched_count:int,
+     *     eligible_count:int,
+     *     dispatched_count:int,
+     *     skipped_locked_count:int,
+     *     skipped_refreshing_count:int,
+     *     skipped_healthy_count:int,
+     *     skipped_cooldown_count:int,
+     *     dispatch_failed_count:int,
+     *     duplicate_submission:bool
+     * }  $result
+     * @return array<string, mixed>
+     */
+    private function snapshotBatchRefreshStatusPayload(array $result): array
+    {
+        $modeLabel = mb_strtolower((string) $result['mode_label']);
+        $summary = [
+            'matched_count' => (int) $result['matched_count'],
+            'eligible_count' => (int) $result['eligible_count'],
+            'dispatched_count' => (int) $result['dispatched_count'],
+            'skipped_locked_count' => (int) $result['skipped_locked_count'],
+            'skipped_refreshing_count' => (int) $result['skipped_refreshing_count'],
+            'skipped_healthy_count' => (int) $result['skipped_healthy_count'],
+            'skipped_cooldown_count' => (int) $result['skipped_cooldown_count'],
+            'dispatch_failed_count' => (int) $result['dispatch_failed_count'],
+        ];
+
+        if ((bool) $result['duplicate_submission']) {
+            return [
+                'type' => 'warning',
+                'message' => 'Já existe um disparo semelhante de refresh em lote em andamento para este mesmo recorte operacional.',
+                'batch' => [
+                    'id' => $result['batch_id'],
+                    'mode_label' => $result['mode_label'],
+                ],
+                'summary' => $summary,
+            ];
+        }
+
+        if ($summary['dispatch_failed_count'] > 0 && $summary['dispatched_count'] === 0) {
+            return [
+                'type' => 'error',
+                'message' => sprintf('O refresh em lote no modo %s falhou antes de enfileirar os tenants elegíveis.', $modeLabel),
+                'batch' => [
+                    'id' => $result['batch_id'],
+                    'mode_label' => $result['mode_label'],
+                ],
+                'summary' => $summary,
+            ];
+        }
+
+        if ($summary['dispatched_count'] > 0) {
+            return [
+                'type' => $result['result_status'] === 'partially_completed' ? 'warning' : 'success',
+                'message' => sprintf(
+                    '%d refresh(es) de snapshot enfileirado(s) no modo %s.',
+                    $summary['dispatched_count'],
+                    $modeLabel,
+                ),
+                'batch' => [
+                    'id' => $result['batch_id'],
+                    'mode_label' => $result['mode_label'],
+                ],
+                'summary' => $summary,
+            ];
+        }
+
+        if ($summary['matched_count'] === 0) {
+            return [
+                'type' => 'warning',
+                'message' => sprintf('Nenhum tenant correspondente foi encontrado para o refresh em lote no modo %s.', $modeLabel),
+                'batch' => [
+                    'id' => $result['batch_id'],
+                    'mode_label' => $result['mode_label'],
+                ],
+                'summary' => $summary,
+            ];
+        }
+
+        return [
+            'type' => 'warning',
+            'message' => sprintf('Nenhum refresh foi enfileirado no modo %s porque os tenants atuais já estavam saudáveis, refreshing, bloqueados ou em cooldown.', $modeLabel),
+            'batch' => [
+                'id' => $result['batch_id'],
+                'mode_label' => $result['mode_label'],
+            ],
+            'summary' => $summary,
+        ];
     }
 }

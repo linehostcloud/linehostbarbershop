@@ -41,5 +41,6 @@ return [
     ],
     'landlord_tenants_detail_snapshot' => [
         'refresh_logging_enabled' => filter_var(env('LANDLORD_TENANT_DETAIL_SNAPSHOT_REFRESH_LOGGING_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'batch_refresh_logging_enabled' => filter_var(env('LANDLORD_TENANT_DETAIL_SNAPSHOT_BATCH_REFRESH_LOGGING_ENABLED', true), FILTER_VALIDATE_BOOL),
     ],
 ];

@@ -29,6 +29,9 @@ Route::middleware('landlord.central')->prefix((string) config('landlord.panel.pa
 
     Route::middleware(['auth', 'landlord.admin'])->group(function (): void {
         Route::get('/tenants', [LandlordTenantController::class, 'index'])->name('landlord.tenants.index');
+        Route::get('/tenants/snapshots', [LandlordTenantController::class, 'snapshotDashboard'])->name('landlord.tenants.snapshots');
+        Route::post('/tenants/snapshots/refresh', [LandlordTenantController::class, 'queueSnapshotBatchRefresh'])
+            ->name('landlord.tenants.snapshots.queue-refresh');
         Route::get('/tenants/novo', [LandlordTenantController::class, 'create'])->name('landlord.tenants.create');
         Route::post('/tenants', [LandlordTenantController::class, 'store'])->name('landlord.tenants.store');
         Route::get('/tenants/{tenant}', [LandlordTenantController::class, 'show'])->name('landlord.tenants.show');

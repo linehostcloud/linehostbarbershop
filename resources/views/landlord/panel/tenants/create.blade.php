@@ -3,7 +3,7 @@
 @section('title', 'Criar tenant SaaS')
 
 @section('content')
-    <div class="mx-auto max-w-5xl space-y-6">
+    <div class="w-full space-y-6">
         <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 lg:flex-row lg:items-center lg:justify-between">
             <div class="space-y-2">
                 <p class="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">Painel SaaS</p>
