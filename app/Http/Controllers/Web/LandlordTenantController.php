@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers\Web;
 
+use App\Application\Actions\Observability\RecordLandlordTenantIndexPerformanceAction;
 use App\Application\Actions\Tenancy\AddLandlordTenantDomainAction;
 use App\Application\Actions\Tenancy\BuildLandlordDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
+use App\Application\Actions\Tenancy\BuildLandlordTenantIndexReadContextAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\ChangeLandlordTenantStatusAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
@@ -23,6 +25,7 @@ use App\Http\Requests\Web\StoreLandlordTenantDomainRequest;
 use App\Http\Requests\Web\StoreLandlordTenantRequest;
 use App\Http\Requests\Web\TransitionLandlordTenantOnboardingStageRequest;
 use App\Http\Requests\Web\UpdateLandlordTenantBasicsRequest;
+use App\Support\Observability\LandlordTenantIndexPerformanceTracker;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -33,22 +36,49 @@ class LandlordTenantController extends Controller
 {
     public function index(
         Request $request,
+        BuildLandlordTenantIndexReadContextAction $buildReadContext,
         BuildLandlordTenantIndexDataAction $buildIndexData,
         BuildLandlordDashboardDataAction $buildDashboardData,
         ResolveLandlordTenantIndexFiltersAction $resolveFilters,
+        RecordLandlordTenantIndexPerformanceAction $recordPerformance,
+        LandlordTenantIndexPerformanceTracker $performanceTracker,
     ): View {
         $filters = $resolveFilters->execute($request->query());
+        $performanceTracker->setMeta('route_name', (string) $request->route()?->getName());
+        $performanceTracker->setMeta('path', $request->path());
 
-        return view('landlord.panel.tenants.index', [
-            'dashboard' => $buildDashboardData->execute(),
-            'tenants' => $buildIndexData->execute($filters),
-            'filters' => $filters,
-            'filterOptions' => $resolveFilters->options(),
-            'hasActiveFilters' => $resolveFilters->hasActiveFilters($filters),
+        try {
+            $payload = $performanceTracker->measure('total_duration_ms', function () use (
+                $buildReadContext,
+                $buildIndexData,
+                $buildDashboardData,
+                $filters,
+                $resolveFilters,
+            ): array {
+                $readContext = $buildReadContext->execute();
+
+                return [
+                    'dashboard' => $buildDashboardData->execute($readContext),
+                    'tenants' => $buildIndexData->execute($filters, $readContext),
+                    'filters' => $filters,
+                    'filterOptions' => $resolveFilters->options(),
+                    'hasActiveFilters' => $resolveFilters->hasActiveFilters($filters),
+                ];
+            });
+        } catch (Throwable $throwable) {
+            $performanceTracker->recordFailure('landlord.tenants.index.read', $throwable);
+            $recordPerformance->execute($request, $filters, $performanceTracker, $throwable);
+
+            throw $throwable;
+        }
+
+        $recordPerformance->execute($request, $filters, $performanceTracker);
+
+        return view('landlord.panel.tenants.index', array_merge($payload, [
             'navigation' => [
                 'active' => 'tenants',
             ],
-        ]);
+        ]));
     }
 
     public function create(

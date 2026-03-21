@@ -31,4 +31,8 @@ return [
         'outbox_events_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_OUTBOX_EVENTS_RETAIN_DAYS', 30),
         'integration_attempts_retain_days' => (int) env('WHATSAPP_HOUSEKEEPING_INTEGRATION_ATTEMPTS_RETAIN_DAYS', 45),
     ],
+    'landlord_tenants_index' => [
+        'performance_logging_enabled' => filter_var(env('LANDLORD_TENANTS_INDEX_PERFORMANCE_LOGGING_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'failure_detail_limit' => (int) env('LANDLORD_TENANTS_INDEX_PERFORMANCE_FAILURE_DETAIL_LIMIT', 5),
+    ],
 ];

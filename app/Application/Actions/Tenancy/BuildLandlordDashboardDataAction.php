@@ -3,7 +3,7 @@
 namespace App\Application\Actions\Tenancy;
 
 use App\Domain\Auth\Models\AuditLog;
-use App\Domain\Tenant\Models\Tenant;
+use App\Support\Observability\LandlordTenantIndexPerformanceTracker;
 use Illuminate\Support\Collection;
 
 class BuildLandlordDashboardDataAction
@@ -17,9 +17,9 @@ class BuildLandlordDashboardDataAction
     private const ATTENTION_LIMIT = 6;
 
     public function __construct(
-        private readonly MapLandlordTenantSummaryAction $mapTenantSummary,
+        private readonly BuildLandlordTenantIndexReadContextAction $buildReadContext,
         private readonly MapLandlordAuditLogActivityAction $mapAuditActivity,
-        private readonly BuildLandlordTenantSuspendedPressureAction $buildSuspendedPressure,
+        private readonly LandlordTenantIndexPerformanceTracker $performanceTracker,
     ) {}
 
     /**
@@ -68,56 +68,14 @@ class BuildLandlordDashboardDataAction
      *     }>
      * }
      */
-    public function execute(): array
+    public function execute(?LandlordTenantIndexReadContext $readContext = null): array
     {
-        $tenants = Tenant::query()
-            ->with([
-                'domains' => fn ($query) => $query->orderByDesc('is_primary')->orderBy('domain'),
-                'memberships.user' => fn ($query) => $query->orderBy('name'),
-            ])
-            ->orderBy('trade_name')
-            ->get();
-
-        $tenantSummaries = $tenants
-            ->map(fn (Tenant $tenant): array => $this->mapTenantSummary->execute($tenant))
-            ->values();
-        $pendingTenants = $this->buildPendingTenants($tenantSummaries);
-        $suspendedPressure = $this->buildSuspendedPressure->execute($tenants);
-
-        return [
-            'headline' => [
-                'total_tenants' => $tenants->count(),
-                'status_totals' => $this->buildBreakdown(
-                    $tenants->countBy(fn (Tenant $tenant): string => (string) $tenant->status),
-                    [
-                        'trial' => 'Trial',
-                        'active' => 'Ativo',
-                        'suspended' => 'Suspenso',
-                    ],
-                ),
-                'onboarding_totals' => $this->buildBreakdown(
-                    $tenants->countBy(fn (Tenant $tenant): string => (string) $tenant->onboarding_stage),
-                    [
-                        'created' => 'Criado',
-                        'provisioned' => 'Provisionado',
-                        'completed' => 'Concluído',
-                    ],
-                ),
-            ],
-            'operational' => [
-                'pending_tenants_count' => $pendingTenants->count(),
-                'suspended_with_pressure_count' => $suspendedPressure->count(),
-                'pressure_window_label' => 'Últimos 7 dias',
-            ],
-            'pending_tenants' => $pendingTenants
-                ->take(self::PENDING_TENANTS_LIMIT)
-                ->values()
-                ->all(),
-            'suspended_pressure' => $suspendedPressure
-                ->take(self::SUSPENDED_PRESSURE_LIMIT)
-                ->values()
-                ->all(),
-            'recent_activity' => AuditLog::query()
+        return $this->performanceTracker->measure('dashboard_data_duration_ms', function () use ($readContext): array {
+            $readContext ??= $this->buildReadContext->execute();
+            $tenantSummaries = $readContext->tenantSummaries;
+            $pendingTenants = $this->buildPendingTenants($tenantSummaries);
+            $suspendedPressure = $readContext->suspendedPressure;
+            $recentActivity = $this->performanceTracker->measure('dashboard_recent_activity_duration_ms', fn () => AuditLog::query()
                 ->with(['actor', 'tenant'])
                 ->latest('created_at')
                 ->latest('id')
@@ -125,9 +83,45 @@ class BuildLandlordDashboardDataAction
                 ->get()
                 ->map(fn (AuditLog $auditLog): array => $this->mapAuditActivity->execute($auditLog))
                 ->values()
-                ->all(),
-            'attention_items' => $this->buildAttentionItems($pendingTenants, $suspendedPressure),
-        ];
+                ->all());
+
+            return [
+                'headline' => [
+                    'total_tenants' => $tenantSummaries->count(),
+                    'status_totals' => $this->buildBreakdown(
+                        $tenantSummaries->countBy(fn (array $tenant): string => (string) data_get($tenant, 'status.code')),
+                        [
+                            'trial' => 'Trial',
+                            'active' => 'Ativo',
+                            'suspended' => 'Suspenso',
+                        ],
+                    ),
+                    'onboarding_totals' => $this->buildBreakdown(
+                        $tenantSummaries->countBy(fn (array $tenant): string => (string) data_get($tenant, 'onboarding_stage.code')),
+                        [
+                            'created' => 'Criado',
+                            'provisioned' => 'Provisionado',
+                            'completed' => 'Concluído',
+                        ],
+                    ),
+                ],
+                'operational' => [
+                    'pending_tenants_count' => $pendingTenants->count(),
+                    'suspended_with_pressure_count' => $suspendedPressure->count(),
+                    'pressure_window_label' => 'Últimos 7 dias',
+                ],
+                'pending_tenants' => $pendingTenants
+                    ->take(self::PENDING_TENANTS_LIMIT)
+                    ->values()
+                    ->all(),
+                'suspended_pressure' => $suspendedPressure
+                    ->take(self::SUSPENDED_PRESSURE_LIMIT)
+                    ->values()
+                    ->all(),
+                'recent_activity' => $recentActivity,
+                'attention_items' => $this->buildAttentionItems($pendingTenants, $suspendedPressure),
+            ];
+        });
     }
 
     /**

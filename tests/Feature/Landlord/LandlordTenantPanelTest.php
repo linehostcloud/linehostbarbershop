@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Landlord;
 
+use App\Application\Actions\Tenancy\BuildLandlordTenantIndexReadContextAction;
+use App\Application\Actions\Tenancy\BuildLandlordTenantSuspendedPressureAction;
+use App\Application\Actions\Tenancy\DetermineLandlordTenantProvisioningStatusAction;
 use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode;
 use App\Domain\Observability\Models\BoundaryRejectionAudit;
@@ -10,7 +13,10 @@ use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Models\User;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Tests\Concerns\RefreshTenantDatabases;
 use Tests\TestCase;
 
@@ -251,6 +257,157 @@ class LandlordTenantPanelTest extends TestCase
         $secondPageResponse->assertOk();
         $this->assertSame('trial', $secondPageResponse->viewData('filters')['status']);
         $this->assertCount(2, $secondPageResponse->viewData('tenants')->getCollection());
+    }
+
+    public function test_landlord_panel_computes_provisioning_once_per_tenant_across_dashboard_and_listing(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $this->createPendingTenant('barbearia-provisioning-unico-a');
+        $this->createProvisionedTenantForPanel('barbearia-provisioning-unico-b');
+        $this->createProvisionedTenantForPanel('barbearia-provisioning-unico-c', status: 'suspended');
+
+        $delegate = app(DetermineLandlordTenantProvisioningStatusAction::class);
+        $calls = 0;
+        $increment = function () use (&$calls): void {
+            $calls++;
+        };
+
+        $this->app->bind(DetermineLandlordTenantProvisioningStatusAction::class, fn (): DetermineLandlordTenantProvisioningStatusAction => new class($delegate, $increment) extends DetermineLandlordTenantProvisioningStatusAction
+        {
+            public function __construct(
+                private readonly DetermineLandlordTenantProvisioningStatusAction $delegate,
+                private readonly \Closure $increment,
+            ) {
+            }
+
+            public function execute(Tenant $tenant): array
+            {
+                ($this->increment)();
+
+                return $this->delegate->execute($tenant);
+            }
+        });
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.index'))
+            ->assertOk();
+
+        $this->assertSame(3, $calls);
+    }
+
+    public function test_landlord_panel_computes_suspended_pressure_once_per_request(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $suspendedTenant = $this->createProvisionedTenantForPanel(
+            slug: 'barbearia-pressure-unico',
+            status: 'suspended',
+            onboardingStage: 'completed',
+        );
+
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $suspendedTenant->id,
+            'tenant_slug' => $suspendedTenant->slug,
+            'channel' => 'api',
+            'outcome' => 'blocked',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'endpoint' => 'api/v1/auth/me',
+            'method' => 'GET',
+            'http_status' => 423,
+            'correlation_id' => 'tenant-pressure-unico-001',
+            'context_json' => ['tenant_status' => 'suspended'],
+            'occurred_at' => now()->subMinutes(5),
+        ]);
+
+        $delegate = app(BuildLandlordTenantSuspendedPressureAction::class);
+        $calls = 0;
+        $increment = function () use (&$calls): void {
+            $calls++;
+        };
+
+        $this->app->bind(BuildLandlordTenantSuspendedPressureAction::class, fn (): BuildLandlordTenantSuspendedPressureAction => new class($delegate, $increment) extends BuildLandlordTenantSuspendedPressureAction
+        {
+            public function __construct(
+                private readonly BuildLandlordTenantSuspendedPressureAction $delegate,
+                private readonly \Closure $increment,
+            ) {
+            }
+
+            public function execute(?Collection $tenants = null): Collection
+            {
+                ($this->increment)();
+
+                return $this->delegate->execute($tenants);
+            }
+        });
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['pressure' => 'suspended_recent']))
+            ->assertOk()
+            ->assertSee('barbearia-pressure-unico');
+
+        $this->assertSame(1, $calls);
+    }
+
+    public function test_landlord_panel_records_structured_performance_log(): void
+    {
+        config()->set('observability.landlord_tenants_index.performance_logging_enabled', true);
+
+        $admin = $this->createLandlordAdmin();
+        $this->createPendingTenant('barbearia-log-perf-pendente');
+        $this->createProvisionedTenantForPanel('barbearia-log-perf-ativa');
+
+        Log::spy();
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['status' => 'active']))
+            ->assertOk();
+
+        Log::shouldHaveReceived('info')
+            ->withArgs(function (string $message, array $context): bool {
+                return $message === 'Landlord tenant index read measured.'
+                    && data_get($context, 'event') === 'landlord.tenants.index.read'
+                    && data_get($context, 'filters.status') === 'active'
+                    && data_get($context, 'counts.tenant_count') === 2
+                    && data_get($context, 'counts.filtered_tenant_count') === 1
+                    && data_get($context, 'counts.provisioning_validation_count') === 2
+                    && is_int(data_get($context, 'durations_ms.total_duration_ms'))
+                    && is_int(data_get($context, 'durations_ms.summary_mapping_duration_ms'));
+            })
+            ->once();
+    }
+
+    public function test_landlord_panel_records_warning_when_landlord_read_fails(): void
+    {
+        config()->set('observability.landlord_tenants_index.performance_logging_enabled', true);
+
+        $admin = $this->createLandlordAdmin();
+        Log::spy();
+
+        $this->app->bind(BuildLandlordTenantIndexReadContextAction::class, fn (): BuildLandlordTenantIndexReadContextAction => new class extends BuildLandlordTenantIndexReadContextAction
+        {
+            public function __construct()
+            {
+            }
+
+            public function execute(): \App\Application\Actions\Tenancy\LandlordTenantIndexReadContext
+            {
+                throw new RuntimeException('Falha sintética de leitura landlord.');
+            }
+        });
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.index'))
+            ->assertStatus(500);
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(function (string $message, array $context): bool {
+                return $message === 'Landlord tenant index read failed.'
+                    && data_get($context, 'event') === 'landlord.tenants.index.read_failed'
+                    && data_get($context, 'exception_class') === RuntimeException::class
+                    && data_get($context, 'counts.technical_failure_count') === 1;
+            })
+            ->atLeast()
+            ->once();
     }
 
     public function test_non_admin_user_cannot_access_landlord_panel(): void
