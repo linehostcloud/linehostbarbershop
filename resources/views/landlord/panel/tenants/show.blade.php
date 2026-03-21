@@ -195,15 +195,29 @@
                         <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
                             <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Bloqueios recentes</p>
                             <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['summary']['total_count'] }}</p>
-                            <p class="mt-2 text-xs leading-5 text-slate-400">Eventos operacionais bloqueados/ignorados no período.</p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">
+                                {{ data_get($suspensionObservability, 'availability.available', true) ? 'Eventos operacionais bloqueados/ignorados no período.' : 'Leitura degradada enquanto a trilha landlord desta seção estiver incompleta.' }}
+                            </p>
                         </div>
 
                         <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
                             <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Canais afetados</p>
                             <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['summary']['affected_channels_count'] }}</p>
-                            <p class="mt-2 text-xs leading-5 text-slate-400">Canais com pelo menos uma ocorrência recente.</p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">
+                                {{ data_get($suspensionObservability, 'availability.available', true) ? 'Canais com pelo menos uma ocorrência recente.' : 'Os totais podem aparecer zerados até a migration landlord ser aplicada.' }}
+                            </p>
                         </div>
                     </div>
+
+                    @if (! data_get($suspensionObservability, 'availability.available', true))
+                        <div class="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                            <p class="font-semibold">{{ $suspensionObservability['availability']['label'] }}</p>
+                            <p class="mt-1">{{ $suspensionObservability['availability']['detail'] }}</p>
+                            <p class="mt-2 text-xs leading-5 text-amber-50/90">
+                                Tabelas ausentes: {{ implode(', ', $suspensionObservability['availability']['missing_tables']) }}.
+                            </p>
+                        </div>
+                    @endif
 
                     <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         @foreach ($suspensionObservability['channels'] as $channel)
@@ -255,7 +269,7 @@
                                 </div>
                             @empty
                                 <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
-                                    Nenhum bloqueio operacional recente foi registrado para este tenant.
+                                    {{ data_get($suspensionObservability, 'availability.available', true) ? 'Nenhum bloqueio operacional recente foi registrado para este tenant.' : 'A leitura dos bloqueios recentes está temporariamente indisponível até a migration landlord ser aplicada.' }}
                                 </div>
                             @endforelse
                         </div>

@@ -10,12 +10,22 @@ use App\Domain\Observability\Models\TenantOperationalBlockAudit;
 use App\Domain\Tenant\Models\Tenant;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class BuildLandlordTenantSuspensionObservabilityAction
 {
     private const WINDOW_DAYS = 7;
 
     private const RECENT_LIMIT = 6;
+
+    /**
+     * @var list<string>
+     */
+    private const REQUIRED_OBSERVABILITY_TABLES = [
+        'tenant_operational_block_audits',
+        'boundary_rejection_audits',
+    ];
 
     /**
      * @var array<string, string>
@@ -31,6 +41,7 @@ class BuildLandlordTenantSuspensionObservabilityAction
 
     /**
      * @return array{
+     *     availability:array{available:bool,label:string|null,detail:string|null,missing_tables:list<string>},
      *     access_tokens:array{active_count:int,last_revoked_count:int|null,last_revoked_at:string|null},
      *     summary:array{window_label:string,total_count:int,affected_channels_count:int,recurring:bool,recurring_label:string},
      *     channels:list<array{channel:string,label:string,count:int,last_seen_at:string|null}>,
@@ -47,6 +58,26 @@ class BuildLandlordTenantSuspensionObservabilityAction
             ->latest('created_at')
             ->get()
             ->first(fn (AuditLog $auditLog): bool => data_get($auditLog->after_json, 'status') === 'suspended');
+        $accessTokens = [
+            'active_count' => UserAccessToken::query()
+                ->where('tenant_id', $tenant->id)
+                ->count(),
+            'last_revoked_count' => is_numeric(data_get($latestSuspensionAudit?->metadata_json, 'revoked_access_token_count'))
+                ? (int) data_get($latestSuspensionAudit?->metadata_json, 'revoked_access_token_count')
+                : null,
+            'last_revoked_at' => $this->formatDate($latestSuspensionAudit?->created_at),
+        ];
+        $missingTables = $this->missingObservabilityTables();
+
+        if ($missingTables !== []) {
+            Log::warning('Landlord tenant suspension observability unavailable because required landlord tables are missing.', [
+                'tenant_id' => $tenant->getKey(),
+                'tenant_slug' => $tenant->slug,
+                'missing_tables' => $missingTables,
+            ]);
+
+            return $this->unavailablePayload($accessTokens, $missingTables);
+        }
 
         $transversalBlockAudits = TenantOperationalBlockAudit::query()
             ->where('tenant_id', $tenant->id)
@@ -71,15 +102,13 @@ class BuildLandlordTenantSuspensionObservabilityAction
             ->count();
 
         return [
-            'access_tokens' => [
-                'active_count' => UserAccessToken::query()
-                    ->where('tenant_id', $tenant->id)
-                    ->count(),
-                'last_revoked_count' => is_numeric(data_get($latestSuspensionAudit?->metadata_json, 'revoked_access_token_count'))
-                    ? (int) data_get($latestSuspensionAudit?->metadata_json, 'revoked_access_token_count')
-                    : null,
-                'last_revoked_at' => $this->formatDate($latestSuspensionAudit?->created_at),
+            'availability' => [
+                'available' => true,
+                'label' => null,
+                'detail' => null,
+                'missing_tables' => [],
             ],
+            'access_tokens' => $accessTokens,
             'summary' => [
                 'window_label' => sprintf('Últimos %d dias', self::WINDOW_DAYS),
                 'total_count' => $totalCount,
@@ -126,6 +155,72 @@ class BuildLandlordTenantSuspensionObservabilityAction
                 ];
             })
             ->sortByDesc('count')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array{active_count:int,last_revoked_count:int|null,last_revoked_at:string|null}  $accessTokens
+     * @param  list<string>  $missingTables
+     * @return array{
+     *     availability:array{available:bool,label:string|null,detail:string|null,missing_tables:list<string>},
+     *     access_tokens:array{active_count:int,last_revoked_count:int|null,last_revoked_at:string|null},
+     *     summary:array{window_label:string,total_count:int,affected_channels_count:int,recurring:bool,recurring_label:string},
+     *     channels:list<array{channel:string,label:string,count:int,last_seen_at:string|null}>,
+     *     recent_blocks:list<array{id:string,channel:string,label:string,detail:string,occurred_at:string|null}>,
+     *     webhook_policy:array{status_code:int,label:string,detail:string}
+     * }
+     */
+    private function unavailablePayload(array $accessTokens, array $missingTables): array
+    {
+        return [
+            'availability' => [
+                'available' => false,
+                'label' => 'Observabilidade operacional indisponível',
+                'detail' => 'A seção de bloqueios operacionais foi degradada com segurança porque a estrutura landlord deste ambiente está incompleta. Aplique a migration landlord pendente para reativar esta leitura.',
+                'missing_tables' => array_values($missingTables),
+            ],
+            'access_tokens' => $accessTokens,
+            'summary' => [
+                'window_label' => 'Indisponível',
+                'total_count' => 0,
+                'affected_channels_count' => 0,
+                'recurring' => false,
+                'recurring_label' => 'Observabilidade operacional indisponível até a estrutura landlord deste ambiente ser corrigida.',
+            ],
+            'channels' => $this->emptyChannels(),
+            'recent_blocks' => [],
+            'webhook_policy' => [
+                'status_code' => 202,
+                'label' => 'Webhook suspenso reconhecido sem processamento',
+                'detail' => 'Webhooks recebidos durante a suspensão retornam 202 e são auditados como ignorados para evitar retries contínuos desnecessários.',
+            ],
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function missingObservabilityTables(): array
+    {
+        return collect(self::REQUIRED_OBSERVABILITY_TABLES)
+            ->filter(fn (string $table): bool => ! Schema::connection('landlord')->hasTable($table))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<array{channel:string,label:string,count:int,last_seen_at:string|null}>
+     */
+    private function emptyChannels(): array
+    {
+        return collect(self::CHANNEL_LABELS)
+            ->map(fn (string $label, string $channel): array => [
+                'channel' => $channel,
+                'label' => $label,
+                'count' => 0,
+                'last_seen_at' => null,
+            ])
             ->values()
             ->all();
     }

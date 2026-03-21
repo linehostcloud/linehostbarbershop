@@ -13,6 +13,7 @@ use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Models\User;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Tests\Concerns\RefreshTenantDatabases;
@@ -283,6 +284,33 @@ class LandlordTenantDetailPanelTest extends TestCase
             ->assertSee('GET api/v1/auth/me')
             ->assertDontSee('Total auditado: 8 evento(s).')
             ->assertDontSee('painel/operacoes/whatsapp');
+    }
+
+    public function test_landlord_tenant_detail_degrades_safely_when_operational_block_audit_table_is_missing(): void
+    {
+        Log::spy();
+
+        $admin = $this->createLandlordAdmin();
+        $tenant = $this->provisionTenant('barbearia-hardening-inconsistente', 'barbearia-hardening-inconsistente.saas.test');
+
+        Schema::connection('landlord')->drop('tenant_operational_block_audits');
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.show', $tenant))
+            ->assertOk()
+            ->assertSee('Hardening da suspensão')
+            ->assertSee('Observabilidade operacional indisponível')
+            ->assertSee('tenant_operational_block_audits')
+            ->assertSee('A leitura dos bloqueios recentes está temporariamente indisponível até a migration landlord ser aplicada.');
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context) use ($tenant): bool {
+                return $message === 'Landlord tenant suspension observability unavailable because required landlord tables are missing.'
+                    && data_get($context, 'tenant_id') === $tenant->id
+                    && data_get($context, 'tenant_slug') === $tenant->slug
+                    && data_get($context, 'missing_tables') === ['tenant_operational_block_audits'];
+            });
     }
 
     public function test_landlord_can_update_tenant_basics_via_detail_panel(): void
