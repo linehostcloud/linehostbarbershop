@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Web;
 
 use App\Application\Actions\Tenancy\AddLandlordTenantDomainAction;
+use App\Application\Actions\Tenancy\BuildLandlordDashboardDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantDetailDataAction;
 use App\Application\Actions\Tenancy\BuildLandlordTenantIndexDataAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
 use App\Application\Actions\Tenancy\ChangeLandlordTenantStatusAction;
 use App\Application\Actions\Tenancy\EnsureLandlordTenantDefaultAutomationsAction;
 use App\Application\Actions\Tenancy\ProvisionTenantFromLandlordPanelAction;
+use App\Application\Actions\Tenancy\ResolveLandlordTenantIndexFiltersAction;
 use App\Application\Actions\Tenancy\RunLandlordTenantSchemaSyncAction;
 use App\Application\Actions\Tenancy\SetLandlordTenantPrimaryDomainAction;
 use App\Application\Actions\Tenancy\TransitionLandlordTenantOnboardingStageAction;
@@ -30,10 +32,19 @@ use Throwable;
 class LandlordTenantController extends Controller
 {
     public function index(
+        Request $request,
         BuildLandlordTenantIndexDataAction $buildIndexData,
+        BuildLandlordDashboardDataAction $buildDashboardData,
+        ResolveLandlordTenantIndexFiltersAction $resolveFilters,
     ): View {
+        $filters = $resolveFilters->execute($request->query());
+
         return view('landlord.panel.tenants.index', [
-            'tenants' => $buildIndexData->execute(),
+            'dashboard' => $buildDashboardData->execute(),
+            'tenants' => $buildIndexData->execute($filters),
+            'filters' => $filters,
+            'filterOptions' => $resolveFilters->options(),
+            'hasActiveFilters' => $resolveFilters->hasActiveFilters($filters),
             'navigation' => [
                 'active' => 'tenants',
             ],

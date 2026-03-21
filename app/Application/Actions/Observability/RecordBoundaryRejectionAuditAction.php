@@ -20,10 +20,11 @@ class RecordBoundaryRejectionAuditAction
         private readonly TenantAuthContext $tenantAuthContext,
         private readonly WhatsappBoundaryRouteMatcher $routeMatcher,
         private readonly WhatsappPayloadSanitizer $sanitizer,
-    ) {
-    }
+    ) {}
 
     /**
+     * Use esta trilha apenas para rejeicoes/ignorados na borda WhatsApp.
+     *
      * @param  array<string, mixed>|null  $payload
      * @param  array<string, mixed>|null  $context
      * @param  array<string, string|null>|null  $headers

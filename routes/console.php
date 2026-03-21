@@ -6,7 +6,7 @@ use App\Application\Actions\Observability\ProcessOutboxEventAction;
 use App\Application\Actions\Observability\ReclaimStaleOutboxEventsAction;
 use App\Application\Actions\Observability\RunWhatsappOperationalHousekeepingAction;
 use App\Application\Actions\Tenancy\BuildTenantProvisioningDataAction;
-use App\Application\Actions\Tenancy\EnsureTenantOperationalAccessAction;
+use App\Application\Actions\Tenancy\GuardTenantOperationalCommandAction;
 use App\Application\Actions\Tenancy\MigrateTenantSchemaAction;
 use App\Application\Actions\Tenancy\ProvisionTenantAction;
 use App\Domain\Communication\Models\WhatsappProviderConfig;
@@ -14,14 +14,12 @@ use App\Domain\Observability\Models\OutboxEvent;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Integration\Whatsapp\WhatsappProviderConfigValidator;
 use App\Infrastructure\Integration\Whatsapp\WhatsappProviderRegistry;
-use App\Infrastructure\Tenancy\Exceptions\TenantOperationalAccessDenied;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Infrastructure\Tenancy\TenantExecutionLockManager;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Schema;
 
@@ -44,31 +42,6 @@ if (! function_exists('resolveTenantCommandTargets')) {
             )
             ->orderBy('slug')
             ->get();
-    }
-}
-
-if (! function_exists('ensureOperationalTenantCommandAccess')) {
-    function ensureOperationalTenantCommandAccess(
-        Tenant $tenant,
-        EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
-        string $commandName,
-    ): bool {
-        try {
-            $ensureTenantOperationalAccess->execute($tenant);
-
-            return true;
-        } catch (TenantOperationalAccessDenied $exception) {
-            Log::notice('Tenant operational runtime command skipped.', [
-                'tenant_id' => $tenant->getKey(),
-                'tenant_slug' => $tenant->slug,
-                'tenant_status' => $tenant->status,
-                'operational_channel' => 'command',
-                'command_name' => $commandName,
-                'skip_reason' => 'tenant_status_runtime_enforcement',
-            ]);
-
-            return false;
-        }
     }
 }
 
@@ -230,7 +203,7 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
     TenantDatabaseManager $databaseManager,
     ProcessOutboxEventAction $processOutboxEvent,
     ReclaimStaleOutboxEventsAction $reclaimStaleOutboxEvents,
-    EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+    GuardTenantOperationalCommandAction $guardTenantOperationalCommand,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $limit = max(1, (int) $this->option('limit'));
@@ -253,7 +226,7 @@ Artisan::command('tenancy:process-outbox {--tenant=* : Slugs ou ULIDs de tenants
     ];
 
     foreach ($tenants as $tenant) {
-        if (! ensureOperationalTenantCommandAccess($tenant, $ensureTenantOperationalAccess, 'tenancy:process-outbox')) {
+        if (! $guardTenantOperationalCommand->execute($tenant, 'tenancy:process-outbox')) {
             $this->warn(sprintf('[%s] O tenant esta suspenso e o processamento do outbox foi ignorado.', $tenant->slug));
 
             continue;
@@ -352,6 +325,7 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
     TenantDatabaseManager $databaseManager,
     ReclaimStaleOutboxEventsAction $reclaimStaleOutboxEvents,
     TenantExecutionLockManager $lockManager,
+    GuardTenantOperationalCommandAction $guardTenantOperationalCommand,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $limit = max(1, (int) $this->option('limit'));
@@ -371,6 +345,12 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
     ];
 
     foreach ($tenants as $tenant) {
+        if (! $guardTenantOperationalCommand->execute($tenant, 'tenancy:reclaim-stale-outbox')) {
+            $this->warn(sprintf('[%s] O tenant esta suspenso e o reclaim do outbox foi ignorado.', $tenant->slug));
+
+            continue;
+        }
+
         $lock = $lockManager->executeForTenant(
             tenant: $tenant,
             operation: 'whatsapp_reclaim_stale_outbox',
@@ -433,7 +413,7 @@ Artisan::command('tenancy:reclaim-stale-outbox {--tenant=* : Slugs ou ULIDs de t
 Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou ULIDs de tenants especificos} {--type=* : Tipos especificos de automacao} {--limit=100 : Quantidade maxima de candidatos por automacao}', function (
     TenantDatabaseManager $databaseManager,
     RunScheduledWhatsappAutomationsAction $runScheduledWhatsappAutomations,
-    EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+    GuardTenantOperationalCommandAction $guardTenantOperationalCommand,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $types = array_values(array_filter((array) $this->option('type'), 'is_string'));
@@ -456,7 +436,7 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
     ];
 
     foreach ($tenants as $tenant) {
-        if (! ensureOperationalTenantCommandAccess($tenant, $ensureTenantOperationalAccess, 'tenancy:process-whatsapp-automations')) {
+        if (! $guardTenantOperationalCommand->execute($tenant, 'tenancy:process-whatsapp-automations')) {
             $this->warn(sprintf('[%s] O tenant esta suspenso e as automacoes foram ignoradas.', $tenant->slug));
 
             continue;
@@ -507,7 +487,7 @@ Artisan::command('tenancy:process-whatsapp-automations {--tenant=* : Slugs ou UL
 Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de tenants especificos}', function (
     TenantDatabaseManager $databaseManager,
     RunScheduledWhatsappAgentAction $runScheduledWhatsappAgent,
-    EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+    GuardTenantOperationalCommandAction $guardTenantOperationalCommand,
 ) {
     $tenantIdentifiers = array_values(array_filter((array) $this->option('tenant')));
     $tenants = resolveTenantCommandTargets($tenantIdentifiers);
@@ -529,7 +509,7 @@ Artisan::command('tenancy:run-whatsapp-agent {--tenant=* : Slugs ou ULIDs de ten
     ];
 
     foreach ($tenants as $tenant) {
-        if (! ensureOperationalTenantCommandAccess($tenant, $ensureTenantOperationalAccess, 'tenancy:run-whatsapp-agent')) {
+        if (! $guardTenantOperationalCommand->execute($tenant, 'tenancy:run-whatsapp-agent')) {
             $this->warn(sprintf('[%s] O tenant esta suspenso e a execucao do agente foi ignorada.', $tenant->slug));
 
             continue;

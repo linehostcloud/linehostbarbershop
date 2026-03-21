@@ -11,7 +11,7 @@ mkdir -p "${proxy_host_dir}"
 
 cat > "${target_file}" <<EOF
 # ------------------------------------------------------------
-# wildcard local tenant hosts for sistema-barbearia
+# local central and tenant hosts for sistema-barbearia
 # ------------------------------------------------------------
 
 map \$scheme \$hsts_header {
@@ -26,7 +26,7 @@ server {
   listen 80;
   listen [::]:80;
 
-  server_name *.${host_base};
+  server_name ${host_base} *.${host_base};
   http2 off;
 
   access_log /data/logs/proxy-host-sistema-barbearia-tenants_access.log proxy;
@@ -42,4 +42,4 @@ EOF
 
 docker exec "${container_name}" sh -lc "nginx -t && nginx -s reload"
 
-printf 'Proxy wildcard ativo para tenants locais em *.%s\n' "${host_base}"
+printf 'Proxy local ativo para %s e *.%s\n' "${host_base}" "${host_base}"

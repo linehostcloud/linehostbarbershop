@@ -13,6 +13,7 @@ use App\Domain\Integration\Models\IntegrationAttempt;
 use App\Domain\Observability\Models\BoundaryRejectionAudit;
 use App\Domain\Observability\Models\EventLog;
 use App\Domain\Observability\Models\OutboxEvent;
+use App\Domain\Observability\Models\TenantOperationalBlockAudit;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Models\User;
@@ -72,6 +73,16 @@ class TenantOperationalStatusEnforcementTest extends TestCase
         $this->get($this->panelUrl($tenant))
             ->assertStatus(423)
             ->assertSee('Tenant suspenso para operacao');
+
+        $audit = TenantOperationalBlockAudit::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('channel', 'web')
+            ->latest('occurred_at')
+            ->firstOrFail();
+
+        $this->assertSame('tenant_status_runtime_enforcement', $audit->reason_code);
+        $this->assertSame(423, $audit->http_status);
+        $this->assertSame('GET', $audit->method);
     }
 
     public function test_suspended_tenant_is_blocked_on_protected_tenant_api_routes(): void
@@ -90,6 +101,16 @@ class TenantOperationalStatusEnforcementTest extends TestCase
             ->assertStatus(423)
             ->assertJsonPath('message', 'O tenant "Barbearia Status Api" esta suspenso e nao pode operar no momento.')
             ->assertJsonPath('tenant_status', 'suspended');
+
+        $audit = TenantOperationalBlockAudit::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('channel', 'api')
+            ->latest('occurred_at')
+            ->firstOrFail();
+
+        $this->assertSame('tenant_status_runtime_enforcement', $audit->reason_code);
+        $this->assertSame(423, $audit->http_status);
+        $this->assertSame('api/v1/auth/me', $audit->endpoint);
     }
 
     public function test_suspended_tenant_is_rejected_on_whatsapp_boundary_and_audited(): void
@@ -200,6 +221,11 @@ class TenantOperationalStatusEnforcementTest extends TestCase
             '--limit' => 10,
         ])->assertExitCode(0);
 
+        $this->artisan('tenancy:reclaim-stale-outbox', [
+            '--tenant' => [$tenant->slug],
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
         $this->artisan('tenancy:process-whatsapp-automations', [
             '--tenant' => [$tenant->slug],
             '--limit' => 10,
@@ -208,6 +234,20 @@ class TenantOperationalStatusEnforcementTest extends TestCase
         $this->artisan('tenancy:run-whatsapp-agent', [
             '--tenant' => [$tenant->slug],
         ])->assertExitCode(0);
+
+        $commandAudits = TenantOperationalBlockAudit::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('channel', 'command')
+            ->orderBy('surface')
+            ->pluck('surface')
+            ->all();
+
+        $this->assertSame([
+            'tenancy:process-outbox',
+            'tenancy:process-whatsapp-automations',
+            'tenancy:reclaim-stale-outbox',
+            'tenancy:run-whatsapp-agent',
+        ], $commandAudits);
 
         $this->withTenantConnection($tenant, function () use ($messageId): void {
             $outboxEvent = OutboxEvent::query()->where('message_id', $messageId)->firstOrFail();
@@ -257,6 +297,11 @@ class TenantOperationalStatusEnforcementTest extends TestCase
 
         $this->assertSame(0, UserAccessToken::query()->where('tenant_id', $tenant->id)->count());
 
+        $credentialIssueCount = TenantOperationalBlockAudit::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('channel', 'credential_issue')
+            ->count();
+
         $this->withHeader('Authorization', 'Bearer '.$apiToken)
             ->getJson($this->tenantUrl($tenant, '/auth/me'))
             ->assertStatus(423)
@@ -285,6 +330,14 @@ class TenantOperationalStatusEnforcementTest extends TestCase
             'password' => 'password123',
             'device_name' => 'api-device-2',
         ])->assertStatus(201)->json('data.access_token');
+
+        $this->assertSame(
+            $credentialIssueCount,
+            TenantOperationalBlockAudit::query()
+                ->where('tenant_id', $tenant->id)
+                ->where('channel', 'credential_issue')
+                ->count(),
+        );
 
         $this->withHeader('Authorization', 'Bearer '.$newApiToken)
             ->getJson($this->tenantUrl($tenant, '/auth/me'))

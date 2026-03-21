@@ -3,6 +3,9 @@
 namespace Tests\Feature\Landlord;
 
 use App\Domain\Auth\Models\AuditLog;
+use App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode;
+use App\Domain\Observability\Models\BoundaryRejectionAudit;
+use App\Domain\Observability\Models\TenantOperationalBlockAudit;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Models\User;
@@ -46,6 +49,208 @@ class LandlordTenantPanelTest extends TestCase
             ->assertSee('Barbearia Matriz')
             ->assertSee('barbearia-centro')
             ->assertSee('Provisionado');
+    }
+
+    public function test_landlord_panel_displays_dashboard_summary_metrics_and_priority_lists(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $activeTenant = $this->provisionTenant('barbearia-ativa-painel', 'barbearia-ativa-painel.saas.test');
+        $this->createTenantUser($activeTenant, email: 'owner-ativo-painel@test.local');
+        $activeTenant->forceFill([
+            'status' => 'active',
+            'onboarding_stage' => 'provisioned',
+        ])->save();
+
+        $pendingTenant = $this->createPendingTenant('barbearia-trial-pendente-painel');
+        $suspendedTenant = $this->provisionTenant('barbearia-suspensa-painel', 'barbearia-suspensa-painel.saas.test');
+        $this->createTenantUser($suspendedTenant, email: 'owner-suspenso-painel@test.local');
+        $suspendedTenant->forceFill([
+            'status' => 'suspended',
+            'onboarding_stage' => 'completed',
+            'suspended_at' => now(),
+        ])->save();
+
+        AuditLog::query()->create([
+            'tenant_id' => $suspendedTenant->id,
+            'action' => 'landlord_tenant.status_changed',
+            'before_json' => ['status' => 'active'],
+            'after_json' => ['status' => 'suspended'],
+            'metadata_json' => ['reason' => 'Suspensão manual para revisão.'],
+        ]);
+
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $suspendedTenant->id,
+            'tenant_slug' => $suspendedTenant->slug,
+            'channel' => 'api',
+            'outcome' => 'blocked',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'endpoint' => 'api/v1/auth/me',
+            'method' => 'GET',
+            'http_status' => 423,
+            'correlation_id' => 'tenant-painel-api-001',
+            'context_json' => ['tenant_status' => 'suspended'],
+            'occurred_at' => now()->subMinutes(30),
+        ]);
+
+        BoundaryRejectionAudit::query()->create([
+            'tenant_id' => $suspendedTenant->id,
+            'tenant_slug' => $suspendedTenant->slug,
+            'direction' => 'webhook',
+            'endpoint' => 'webhooks/whatsapp/fake',
+            'method' => 'POST',
+            'host' => 'barbearia-suspensa-painel.saas.test',
+            'code' => WhatsappBoundaryRejectionCode::SecurityPolicyViolation->value,
+            'message' => 'Webhook ignorado porque o tenant está suspenso.',
+            'http_status' => 202,
+            'correlation_id' => 'tenant-painel-webhook-001',
+            'context_json' => ['tenant_status' => 'suspended'],
+            'occurred_at' => now()->subMinutes(15),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.index'))
+            ->assertOk()
+            ->assertSee('Resumo landlord')
+            ->assertSee('Total de tenants')
+            ->assertSee('Status administrativo')
+            ->assertSee('Onboarding')
+            ->assertSee('Pendências operacionais básicas')
+            ->assertSee('Suspensos com pressão recente')
+            ->assertSee('Atividade administrativa recente')
+            ->assertSee('Atenção prioritária')
+            ->assertSee('Barbearia Trial Pendente Painel')
+            ->assertSee('Banco pendente')
+            ->assertSee('Barbearia Suspensa Painel')
+            ->assertSee('Status do tenant atualizado')
+            ->assertSee('API tenant bloqueada')
+            ->assertSee('Webhooks ignorados')
+            ->assertSee('Barbearia Ativa Painel');
+    }
+
+    public function test_landlord_panel_filters_listing_via_query_string(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $pendingTenant = $this->createPendingTenant('barbearia-trial-filtro-lista');
+        $activeTenant = $this->createProvisionedTenantForPanel(
+            slug: 'barbearia-ativa-filtro-lista',
+            status: 'active',
+            onboardingStage: 'completed',
+        );
+        $suspendedTenant = $this->createProvisionedTenantForPanel(
+            slug: 'barbearia-suspensa-filtro-lista',
+            status: 'suspended',
+            onboardingStage: 'provisioned',
+        );
+
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $suspendedTenant->id,
+            'tenant_slug' => $suspendedTenant->slug,
+            'channel' => 'api',
+            'outcome' => 'blocked',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'endpoint' => 'api/v1/auth/me',
+            'method' => 'GET',
+            'http_status' => 423,
+            'correlation_id' => 'tenant-filtro-api-001',
+            'context_json' => ['tenant_status' => 'suspended'],
+            'occurred_at' => now()->subMinutes(10),
+        ]);
+
+        $statusResponse = $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['status' => 'trial']));
+        $statusResponse->assertOk();
+        $this->assertSame(
+            [$pendingTenant->slug],
+            $statusResponse->viewData('tenants')->getCollection()->pluck('slug')->all(),
+        );
+        $this->assertSame('trial', $statusResponse->viewData('filters')['status']);
+
+        $onboardingResponse = $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['onboarding_stage' => 'completed']));
+        $onboardingResponse->assertOk();
+        $this->assertSame(
+            [$activeTenant->slug],
+            $onboardingResponse->viewData('tenants')->getCollection()->pluck('slug')->all(),
+        );
+
+        $pendingResponse = $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['provisioning' => 'pending']));
+        $pendingResponse->assertOk();
+        $this->assertSame(
+            [$pendingTenant->slug],
+            $pendingResponse->viewData('tenants')->getCollection()->pluck('slug')->all(),
+        );
+
+        $pressureResponse = $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['pressure' => 'suspended_recent']));
+        $pressureResponse->assertOk();
+        $this->assertSame(
+            [$suspendedTenant->slug],
+            $pressureResponse->viewData('tenants')->getCollection()->pluck('slug')->all(),
+        );
+        $this->assertSame('suspended_recent', $pressureResponse->viewData('filters')['pressure']);
+    }
+
+    public function test_landlord_panel_renders_actionable_dashboard_links(): void
+    {
+        $admin = $this->createLandlordAdmin();
+        $pendingTenant = $this->createPendingTenant('barbearia-link-pendente');
+        $suspendedTenant = $this->createProvisionedTenantForPanel(
+            slug: 'barbearia-link-suspensa',
+            status: 'suspended',
+            onboardingStage: 'completed',
+        );
+
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $suspendedTenant->id,
+            'tenant_slug' => $suspendedTenant->slug,
+            'channel' => 'api',
+            'outcome' => 'blocked',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'endpoint' => 'api/v1/auth/me',
+            'method' => 'GET',
+            'http_status' => 423,
+            'correlation_id' => 'tenant-link-api-001',
+            'context_json' => ['tenant_status' => 'suspended'],
+            'occurred_at' => now()->subMinutes(5),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(route('landlord.tenants.index'))
+            ->assertOk()
+            ->assertSee(route('landlord.tenants.index', ['status' => 'trial']), false)
+            ->assertSee(route('landlord.tenants.index', ['onboarding_stage' => 'created']), false)
+            ->assertSee(route('landlord.tenants.index', ['provisioning' => 'pending']), false)
+            ->assertSee(route('landlord.tenants.index', ['provisioning' => 'database_missing']), false)
+            ->assertSee(route('landlord.tenants.index', ['pressure' => 'suspended_recent']), false)
+            ->assertSee(route('landlord.tenants.show', $pendingTenant), false)
+            ->assertSee(route('landlord.tenants.show', $suspendedTenant), false);
+    }
+
+    public function test_landlord_panel_preserves_query_string_on_pagination_links(): void
+    {
+        $admin = $this->createLandlordAdmin();
+
+        foreach (range(1, 17) as $index) {
+            $tenant = $this->createPendingTenant(sprintf('barbearia-trial-paginacao-%02d', $index));
+            $tenant->forceFill([
+                'created_at' => now()->subMinutes($index),
+                'updated_at' => now()->subMinutes($index),
+            ])->save();
+        }
+
+        $response = $this->actingAs($admin)
+            ->get(route('landlord.tenants.index', ['status' => 'trial']));
+        $response->assertOk();
+
+        $paginator = $response->viewData('tenants');
+
+        $this->assertStringContainsString('status=trial', $paginator->url(2));
+
+        $secondPageResponse = $this->actingAs($admin)->get($paginator->url(2));
+        $secondPageResponse->assertOk();
+        $this->assertSame('trial', $secondPageResponse->viewData('filters')['status']);
+        $this->assertCount(2, $secondPageResponse->viewData('tenants')->getCollection());
     }
 
     public function test_non_admin_user_cannot_access_landlord_panel(): void
@@ -139,5 +344,43 @@ class LandlordTenantPanelTest extends TestCase
             'email_verified_at' => now(),
             'password' => 'password123',
         ]);
+    }
+
+    private function createPendingTenant(string $slug): Tenant
+    {
+        $databasePath = $this->trackTenantDatabase(sprintf('tenant_%s.sqlite', str_replace('-', '_', $slug)));
+
+        return Tenant::query()->create([
+            'legal_name' => strtoupper(str_replace('-', ' ', $slug)).' LTDA',
+            'trade_name' => ucwords(str_replace('-', ' ', $slug)),
+            'slug' => $slug,
+            'niche' => 'barbershop',
+            'timezone' => 'America/Sao_Paulo',
+            'currency' => 'BRL',
+            'status' => 'trial',
+            'onboarding_stage' => 'created',
+            'database_name' => $databasePath,
+            'database_host' => null,
+            'database_port' => null,
+            'database_username' => null,
+            'database_password_encrypted' => null,
+        ]);
+    }
+
+    private function createProvisionedTenantForPanel(
+        string $slug,
+        string $status = 'active',
+        string $onboardingStage = 'completed',
+    ): Tenant {
+        $tenant = $this->provisionTenant($slug, sprintf('%s.saas.test', $slug));
+        $this->createTenantUser($tenant, email: sprintf('%s-owner@test.local', $slug));
+
+        $tenant->forceFill([
+            'status' => $status,
+            'onboarding_stage' => $onboardingStage,
+            'suspended_at' => $status === 'suspended' ? now() : null,
+        ])->save();
+
+        return $tenant;
     }
 }

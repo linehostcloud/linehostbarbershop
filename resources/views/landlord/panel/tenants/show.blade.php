@@ -169,11 +169,11 @@
                         <div>
                             <h2 class="text-lg font-semibold text-white">Hardening da suspensão</h2>
                             <p class="mt-1 text-sm text-slate-400">
-                                Sessões revogadas e pressão recente de bloqueios na borda WhatsApp.
+                                Sessões revogadas e pressão recente de bloqueios operacionais por canal.
                             </p>
                         </div>
                         <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200">
-                            {{ $suspensionObservability['boundary']['window_label'] }}
+                            {{ $suspensionObservability['summary']['window_label'] }}
                         </span>
                     </div>
 
@@ -193,32 +193,72 @@
                         </div>
 
                         <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Outbound bloqueado</p>
-                            <p class="mt-3 text-2xl font-semibold text-white">
-                                {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'outbound')['count'] ?? 0 }}
-                            </p>
-                            <p class="mt-2 text-xs leading-5 text-slate-400">
-                                Última ocorrência em {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'outbound')['last_seen_at'] ?? 'não registrada' }}.
-                            </p>
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Bloqueios recentes</p>
+                            <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['summary']['total_count'] }}</p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">Eventos operacionais bloqueados/ignorados no período.</p>
                         </div>
 
                         <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Webhooks ignorados</p>
-                            <p class="mt-3 text-2xl font-semibold text-white">
-                                {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'webhook')['count'] ?? 0 }}
-                            </p>
-                            <p class="mt-2 text-xs leading-5 text-slate-400">
-                                Última ocorrência em {{ collect($suspensionObservability['boundary']['channels'])->firstWhere('channel', 'webhook')['last_seen_at'] ?? 'não registrada' }}.
-                            </p>
+                            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Canais afetados</p>
+                            <p class="mt-3 text-2xl font-semibold text-white">{{ $suspensionObservability['summary']['affected_channels_count'] }}</p>
+                            <p class="mt-2 text-xs leading-5 text-slate-400">Canais com pelo menos uma ocorrência recente.</p>
                         </div>
                     </div>
 
-                    <div class="mt-4 rounded-2xl border {{ $suspensionObservability['boundary']['recurring'] ? 'border-amber-500/30 bg-amber-500/10 text-amber-100' : 'border-slate-800 bg-slate-950/60 text-slate-300' }} p-4 text-sm">
-                        <p class="font-semibold">{{ $suspensionObservability['boundary']['recurring_label'] }}</p>
-                        <p class="mt-2 text-xs leading-5 {{ $suspensionObservability['boundary']['recurring'] ? 'text-amber-50/90' : 'text-slate-400' }}">
-                            Total auditado na borda: {{ $suspensionObservability['boundary']['total_count'] }} evento(s).
+                    <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        @foreach ($suspensionObservability['channels'] as $channel)
+                            @continue($channel['count'] === 0)
+
+                            <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <p class="text-sm font-semibold text-slate-100">{{ $channel['label'] }}</p>
+                                    <span class="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300">{{ $channel['count'] }}</span>
+                                </div>
+                                <p class="mt-2 text-xs leading-5 text-slate-400">
+                                    Última ocorrência em {{ $channel['last_seen_at'] ?: 'não registrada' }}.
+                                </p>
+                            </div>
+                        @endforeach
+                    </div>
+
+                    <div class="mt-4 rounded-2xl border {{ $suspensionObservability['summary']['recurring'] ? 'border-amber-500/30 bg-amber-500/10 text-amber-100' : 'border-slate-800 bg-slate-950/60 text-slate-300' }} p-4 text-sm">
+                        <p class="font-semibold">{{ $suspensionObservability['summary']['recurring_label'] }}</p>
+                        <p class="mt-2 text-xs leading-5 {{ $suspensionObservability['summary']['recurring'] ? 'text-amber-50/90' : 'text-slate-400' }}">
+                            Total auditado: {{ $suspensionObservability['summary']['total_count'] }} evento(s).
                             {{ $suspensionObservability['webhook_policy']['detail'] }}
                         </p>
+                    </div>
+
+                    <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                        <div class="flex items-center justify-between gap-4">
+                            <div>
+                                <h3 class="text-sm font-semibold text-white">Bloqueios recentes</h3>
+                                <p class="mt-1 text-xs text-slate-400">Últimas ocorrências observadas por canal.</p>
+                            </div>
+                            <span class="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-300">
+                                {{ count($suspensionObservability['recent_blocks']) }} recentes
+                            </span>
+                        </div>
+
+                        <div class="mt-4 space-y-3">
+                            @forelse ($suspensionObservability['recent_blocks'] as $block)
+                                <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p class="text-sm font-semibold text-slate-100">{{ $block['label'] }}</p>
+                                            <p class="mt-2 text-xs leading-5 text-slate-400">{{ $block['detail'] }}</p>
+                                        </div>
+                                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300">
+                                            {{ $block['occurred_at'] ?: 'agora' }}
+                                        </span>
+                                    </div>
+                                </div>
+                            @empty
+                                <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
+                                    Nenhum bloqueio operacional recente foi registrado para este tenant.
+                                </div>
+                            @endforelse
+                        </div>
                     </div>
                 </div>
 

@@ -10,6 +10,12 @@ O documento principal do projeto está em:
 
 Esse arquivo define produto, modelagem de dados, arquitetura, automações, integrações, estratégia de testes e roadmap.
 
+Complementos técnicos vivos:
+
+- `docs/tenant-aware-operacao-e-auditoria.md`
+
+Esse guia operacional documenta os contratos internos de enforcement tenant-aware e quando usar `audit_logs`, `tenant_operational_block_audits` e `boundary_rejection_audits`.
+
 ## Stack
 
 - Laravel 12

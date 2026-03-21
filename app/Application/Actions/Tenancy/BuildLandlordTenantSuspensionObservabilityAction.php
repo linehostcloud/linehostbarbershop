@@ -6,23 +6,35 @@ use App\Domain\Auth\Models\AuditLog;
 use App\Domain\Auth\Models\UserAccessToken;
 use App\Domain\Communication\Enums\WhatsappBoundaryRejectionCode;
 use App\Domain\Observability\Models\BoundaryRejectionAudit;
+use App\Domain\Observability\Models\TenantOperationalBlockAudit;
 use App\Domain\Tenant\Models\Tenant;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 class BuildLandlordTenantSuspensionObservabilityAction
 {
     private const WINDOW_DAYS = 7;
 
+    private const RECENT_LIMIT = 6;
+
+    /**
+     * @var array<string, string>
+     */
+    private const CHANNEL_LABELS = [
+        'web' => 'Painel web bloqueado',
+        'api' => 'API tenant bloqueada',
+        'command' => 'Runtime assíncrono ignorado',
+        'credential_issue' => 'Emissão de credencial bloqueada',
+        'outbound' => 'API outbound bloqueada',
+        'webhook' => 'Webhooks ignorados',
+    ];
+
     /**
      * @return array{
      *     access_tokens:array{active_count:int,last_revoked_count:int|null,last_revoked_at:string|null},
-     *     boundary:array{
-     *         window_label:string,
-     *         total_count:int,
-     *         recurring:bool,
-     *         recurring_label:string,
-     *         channels:list<array{channel:string,label:string,count:int,last_seen_at:string|null}>
-     *     },
+     *     summary:array{window_label:string,total_count:int,affected_channels_count:int,recurring:bool,recurring_label:string},
+     *     channels:list<array{channel:string,label:string,count:int,last_seen_at:string|null}>,
+     *     recent_blocks:list<array{id:string,channel:string,label:string,detail:string,occurred_at:string|null}>,
      *     webhook_policy:array{status_code:int,label:string,detail:string}
      * }
      */
@@ -36,32 +48,27 @@ class BuildLandlordTenantSuspensionObservabilityAction
             ->get()
             ->first(fn (AuditLog $auditLog): bool => data_get($auditLog->after_json, 'status') === 'suspended');
 
-        $suspensionBoundaryAudits = BoundaryRejectionAudit::query()
+        $transversalBlockAudits = TenantOperationalBlockAudit::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('reason_code', 'tenant_status_runtime_enforcement')
+            ->where('occurred_at', '>=', $windowStart)
+            ->latest('occurred_at')
+            ->get();
+
+        $boundaryAudits = BoundaryRejectionAudit::query()
             ->where('tenant_id', $tenant->id)
             ->where('code', WhatsappBoundaryRejectionCode::SecurityPolicyViolation->value)
             ->where('occurred_at', '>=', $windowStart)
             ->latest('occurred_at')
             ->get()
-            ->filter(fn (BoundaryRejectionAudit $audit): bool => data_get($audit->context_json, 'tenant_status') === 'suspended');
+            ->filter(fn (BoundaryRejectionAudit $audit): bool => data_get($audit->context_json, 'tenant_status') === 'suspended')
+            ->values();
 
-        $channels = collect([
-            'outbound' => 'API outbound bloqueada',
-            'webhook' => 'Webhooks ignorados',
-        ])->map(function (string $label, string $channel) use ($suspensionBoundaryAudits): array {
-            $channelAudits = $suspensionBoundaryAudits->where('direction', $channel)->values();
-
-            return [
-                'channel' => $channel,
-                'label' => $label,
-                'count' => $channelAudits->count(),
-                'last_seen_at' => $this->formatDate($channelAudits->first()?->occurred_at),
-            ];
-        })->values()->all();
-
-        $boundaryTotal = array_sum(array_map(
-            static fn (array $channel): int => (int) $channel['count'],
-            $channels,
-        ));
+        $channels = $this->buildChannels($transversalBlockAudits, $boundaryAudits);
+        $totalCount = (int) collect($channels)->sum('count');
+        $affectedChannelsCount = collect($channels)
+            ->filter(fn (array $channel): bool => $channel['count'] > 0)
+            ->count();
 
         return [
             'access_tokens' => [
@@ -73,21 +80,129 @@ class BuildLandlordTenantSuspensionObservabilityAction
                     : null,
                 'last_revoked_at' => $this->formatDate($latestSuspensionAudit?->created_at),
             ],
-            'boundary' => [
+            'summary' => [
                 'window_label' => sprintf('Últimos %d dias', self::WINDOW_DAYS),
-                'total_count' => $boundaryTotal,
-                'recurring' => $boundaryTotal >= 5,
-                'recurring_label' => $boundaryTotal >= 5
-                    ? 'Recorrência detectada na borda WhatsApp durante a suspensão.'
-                    : 'Sem recorrência relevante na borda WhatsApp no período.',
-                'channels' => $channels,
+                'total_count' => $totalCount,
+                'affected_channels_count' => $affectedChannelsCount,
+                'recurring' => $totalCount >= 5,
+                'recurring_label' => $totalCount >= 5
+                    ? 'Recorrência detectada de bloqueios operacionais durante a suspensão.'
+                    : 'Sem recorrência relevante de bloqueios operacionais no período.',
             ],
+            'channels' => $channels,
+            'recent_blocks' => $this->buildRecentBlocks($transversalBlockAudits, $boundaryAudits),
             'webhook_policy' => [
                 'status_code' => 202,
                 'label' => 'Webhook suspenso reconhecido sem processamento',
                 'detail' => 'Webhooks recebidos durante a suspensão retornam 202 e são auditados como ignorados para evitar retries contínuos desnecessários.',
             ],
         ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function channelLabels(): array
+    {
+        return self::CHANNEL_LABELS;
+    }
+
+    /**
+     * @return list<array{channel:string,label:string,count:int,last_seen_at:string|null}>
+     */
+    private function buildChannels(Collection $transversalBlockAudits, Collection $boundaryAudits): array
+    {
+        return collect(self::CHANNEL_LABELS)
+            ->map(function (string $label, string $channel) use ($transversalBlockAudits, $boundaryAudits): array {
+                $channelAudits = in_array($channel, ['outbound', 'webhook'], true)
+                    ? $boundaryAudits->where('direction', $channel)->values()
+                    : $transversalBlockAudits->where('channel', $channel)->values();
+
+                return [
+                    'channel' => $channel,
+                    'label' => $label,
+                    'count' => $channelAudits->count(),
+                    'last_seen_at' => $this->formatDate($channelAudits->first()?->occurred_at),
+                ];
+            })
+            ->sortByDesc('count')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<array{id:string,channel:string,label:string,detail:string,occurred_at:string|null}>
+     */
+    private function buildRecentBlocks(Collection $transversalBlockAudits, Collection $boundaryAudits): array
+    {
+        $transversalItems = $transversalBlockAudits
+            ->map(function (TenantOperationalBlockAudit $audit): array {
+                return [
+                    'id' => $audit->id,
+                    'channel' => $audit->channel,
+                    'label' => self::CHANNEL_LABELS[$audit->channel] ?? 'Bloqueio operacional',
+                    'detail' => $this->transversalDetail($audit),
+                    'occurred_at' => $this->formatDate($audit->occurred_at),
+                    'sort_at' => $audit->occurred_at?->getTimestamp() ?? 0,
+                ];
+            });
+
+        $boundaryItems = $boundaryAudits
+            ->map(function (BoundaryRejectionAudit $audit): array {
+                $channel = (string) $audit->direction;
+
+                return [
+                    'id' => $audit->id,
+                    'channel' => $channel,
+                    'label' => self::CHANNEL_LABELS[$channel] ?? 'Bloqueio operacional',
+                    'detail' => $this->boundaryDetail($audit),
+                    'occurred_at' => $this->formatDate($audit->occurred_at),
+                    'sort_at' => $audit->occurred_at?->getTimestamp() ?? 0,
+                ];
+            });
+
+        return $transversalItems
+            ->merge($boundaryItems)
+            ->sortByDesc('sort_at')
+            ->take(self::RECENT_LIMIT)
+            ->map(fn (array $item): array => [
+                'id' => $item['id'],
+                'channel' => $item['channel'],
+                'label' => $item['label'],
+                'detail' => $item['detail'],
+                'occurred_at' => $item['occurred_at'],
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function transversalDetail(TenantOperationalBlockAudit $audit): string
+    {
+        return match ($audit->channel) {
+            'command' => sprintf(
+                'Comando %s ignorado com tenant em status %s.',
+                $audit->surface ?: 'desconhecido',
+                data_get($audit->context_json, 'tenant_status', 'desconhecido'),
+            ),
+            'credential_issue' => sprintf(
+                'Emissão de credencial bloqueada em %s.',
+                (string) data_get($audit->context_json, 'token_name', 'fluxo interno'),
+            ),
+            default => trim(sprintf(
+                '%s %s',
+                $audit->method ?: '',
+                $audit->endpoint ?: ($audit->surface ?: 'rota tenant bloqueada'),
+            )),
+        };
+    }
+
+    private function boundaryDetail(BoundaryRejectionAudit $audit): string
+    {
+        return trim(sprintf(
+            '%s %s',
+            $audit->method ?: '',
+            $audit->endpoint ?: 'borda WhatsApp',
+        ));
     }
 
     private function formatDate(mixed $value): ?string

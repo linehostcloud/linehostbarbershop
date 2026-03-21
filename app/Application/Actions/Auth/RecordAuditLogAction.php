@@ -9,6 +9,9 @@ use App\Models\User;
 class RecordAuditLogAction
 {
     /**
+     * Use esta trilha para mudancas administrativas landlord com actor e before/after.
+     * Bloqueios operacionais de runtime e rejeicoes de boundary usam trilhas dedicadas.
+     *
      * @param  array<string, mixed>|null  $before
      * @param  array<string, mixed>|null  $after
      * @param  array<string, mixed>|null  $metadata

@@ -2,10 +2,12 @@
 
 namespace App\Application\Actions\Auth;
 
+use App\Application\Actions\Observability\RecordTenantOperationalBlockAuditAction;
 use App\Application\Actions\Tenancy\EnsureTenantOperationalAccessAction;
 use App\Application\DTOs\IssuedTenantAccessToken;
 use App\Domain\Auth\Models\UserAccessToken;
 use App\Domain\Tenant\Models\Tenant;
+use App\Infrastructure\Tenancy\Exceptions\TenantOperationalAccessDenied;
 use App\Models\User;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -15,6 +17,7 @@ class IssueTenantAccessTokenAction
 {
     public function __construct(
         private readonly EnsureTenantOperationalAccessAction $ensureTenantOperationalAccess,
+        private readonly RecordTenantOperationalBlockAuditAction $recordOperationalBlockAudit,
     ) {}
 
     /**
@@ -22,7 +25,26 @@ class IssueTenantAccessTokenAction
      */
     public function execute(User $user, Tenant $tenant, array $context = []): IssuedTenantAccessToken
     {
-        $this->ensureTenantOperationalAccess->execute($tenant);
+        try {
+            $this->ensureTenantOperationalAccess->execute($tenant);
+        } catch (TenantOperationalAccessDenied $exception) {
+            $this->recordOperationalBlockAudit->execute(
+                tenant: $tenant,
+                channel: 'credential_issue',
+                outcome: 'blocked',
+                reasonCode: 'tenant_status_runtime_enforcement',
+                surface: static::class,
+                context: [
+                    'tenant_status' => $tenant->status,
+                    'enforcement_policy' => 'tenant_status_runtime_enforcement',
+                    'message' => $exception->getMessage(),
+                    'user_id' => $user->getKey(),
+                    'token_name' => $context['name'] ?? 'api',
+                ],
+            );
+
+            throw $exception;
+        }
 
         $membership = $user->memberships()
             ->where('tenant_id', $tenant->id)

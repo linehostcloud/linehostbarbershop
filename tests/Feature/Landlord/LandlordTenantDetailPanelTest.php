@@ -8,6 +8,7 @@ use App\Domain\Auth\Models\UserAccessToken;
 use App\Domain\Automation\Enums\WhatsappAutomationType;
 use App\Domain\Automation\Models\Automation;
 use App\Domain\Observability\Models\BoundaryRejectionAudit;
+use App\Domain\Observability\Models\TenantOperationalBlockAudit;
 use App\Domain\Tenant\Models\Tenant;
 use App\Infrastructure\Tenancy\TenantDatabaseManager;
 use App\Models\User;
@@ -215,17 +216,73 @@ class LandlordTenantDetailPanelTest extends TestCase
             'occurred_at' => now(),
         ]);
 
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $tenant->id,
+            'tenant_slug' => $tenant->slug,
+            'channel' => 'api',
+            'outcome' => 'blocked',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'route_name' => 'api.tenant.context',
+            'method' => 'GET',
+            'endpoint' => 'api/v1/auth/me',
+            'host' => $tenant->domains()->value('domain'),
+            'http_status' => 423,
+            'correlation_id' => (string) Str::uuid(),
+            'context_json' => [
+                'tenant_status' => 'suspended',
+            ],
+            'occurred_at' => now()->subMinutes(30),
+        ]);
+
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $tenant->id,
+            'tenant_slug' => $tenant->slug,
+            'channel' => 'command',
+            'outcome' => 'skipped',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'surface' => 'tenancy:process-outbox',
+            'correlation_id' => (string) Str::uuid(),
+            'context_json' => [
+                'tenant_status' => 'suspended',
+            ],
+            'occurred_at' => now()->subMinutes(10),
+        ]);
+
+        TenantOperationalBlockAudit::query()->create([
+            'tenant_id' => $otherTenant->id,
+            'tenant_slug' => $otherTenant->slug,
+            'channel' => 'web',
+            'outcome' => 'blocked',
+            'reason_code' => 'tenant_status_runtime_enforcement',
+            'endpoint' => 'painel/operacoes/whatsapp',
+            'method' => 'GET',
+            'host' => $otherTenant->domains()->value('domain'),
+            'http_status' => 423,
+            'correlation_id' => (string) Str::uuid(),
+            'context_json' => [
+                'tenant_status' => 'suspended',
+            ],
+            'occurred_at' => now(),
+        ]);
+
         $this->actingAs($admin)
             ->get(route('landlord.tenants.show', $tenant))
             ->assertOk()
             ->assertSee('Hardening da suspensão')
             ->assertSee('Tokens ativos')
             ->assertSee('Revogados na última suspensão')
-            ->assertSee('Outbound bloqueado')
+            ->assertSee('Bloqueios recentes')
+            ->assertSee('Canais afetados')
+            ->assertSee('API tenant bloqueada')
+            ->assertSee('Runtime assíncrono ignorado')
+            ->assertSee('API outbound bloqueada')
             ->assertSee('Webhooks ignorados')
-            ->assertSee('Recorrência detectada na borda WhatsApp durante a suspensão.')
-            ->assertSee('Total auditado na borda: 5 evento(s).')
-            ->assertDontSee('Total auditado na borda: 6 evento(s).');
+            ->assertSee('Recorrência detectada de bloqueios operacionais durante a suspensão.')
+            ->assertSee('Total auditado: 7 evento(s).')
+            ->assertSee('Comando tenancy:process-outbox ignorado com tenant em status suspended.')
+            ->assertSee('GET api/v1/auth/me')
+            ->assertDontSee('Total auditado: 8 evento(s).')
+            ->assertDontSee('painel/operacoes/whatsapp');
     }
 
     public function test_landlord_can_update_tenant_basics_via_detail_panel(): void
